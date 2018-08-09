@@ -35,27 +35,56 @@
 #include <WiFiManager.h> 
 #include <WiFiClient.h>
 
-const char* ssid1 = "ohm";
-const char* password1 = "shesthebest";
+#include "time.h"
+#include <rom/rtc.h>
+
+#include <sys/time.h>
+#include "esp32/ulp.h"
+//#include "esp_deep_sleep.h"
+#include "esp_sleep.h"
+#include "driver/rtc_io.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+
+const char* ssid = "ohm";
+const char* password = "shesthebest";
 
 GxIO_Class io(SPI, /*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16);	// arbitrary selection of 17, 16
 GxEPD_Class gfx(io, /*RST=*/ 16, /*BUSY=*/ 4);				 // arbitrary selection of (16), 4
 
 unsigned long lastConnectionTime = 0;          // Last time you connected to the server, in milliseconds
-//1000000L is one second
+// 1000000LL is one second
 
+const uint64_t OneMinute = 60000000LL;	/*6000000 uS = 1 minute*/
+const uint64_t MinutesInAnHour = 60LL;		/*60 min = 1 hour*/
 // TODO andymule this number weirdly lets me wake up every 6 hours or so ? This hasn't proven true and needs more work
-const uint64_t UpdateInterval = 68719476736;//60L*60L*12L*1000000L*6L*12L; // Delay between updates, in microseconds
+const uint64_t SleepTimeMicroseconds = OneMinute * 1;//MinutesInAnHour * 2LL;
+
+// RTC_DATA_ATTR marks variables to be saved across sleep
+static RTC_DATA_ATTR struct timeval sleep_enter_time;
 
 // TODO grab location from IP, for now it's this hard string to Seattle
-String yahoo = "https://query.yahooapis.com/v1/public/yql?q=select%20*%20from%20weather.forecast%20where%20woeid%20in%20(select%20woeid%20from%20geo.places(1)%20where%20text%3D%22seattle%2C%20wa%22)&format=json&env=store%3A%2F%2Fdatatables.org%2Falltableswithkeys";
-//unsigned long timeout = 10000;  // ms
+const String yahoostring1 = "https://query.yahooapis.com/v1/public/yql?q=select%20*%20from%20weather.forecast%20where%20woeid%20in%20(select%20woeid%20from%20geo.places(1)%20where%20text%3D%22";
+String yahoostringCity;
+const String yahoostring2 = "%2C%20";
+String yahoostringState;
+const String yahoostring3 = "%22)&format=json&env=store%3A%2F%2Fdatatables.org%2Falltableswithkeys";
+const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8&format=1";
 
-HTTPClient http;
+HTTPClient yahoohttp;
+HTTPClient geolocatehttp;
 WiFiClient client; // wifi client object
 
-//const int width = 296;
-//const int height = 128;
+class Geolocate
+{
+public:
+	String ip;
+	String city;
+	String region_code;
+	float lat, lon;
+	int geoname_id;
+};
+Geolocate geolocate;
 
 const char* city;
 const char* weathertime;
@@ -76,61 +105,103 @@ public:
 
 WeatherDay WeatherDays[10] = {};
 
+//const int width = 296;
+//const int height = 128;
 
-// (someone else wrote this math)
-// Wifi on section takes : 7.37 secs to complete at 119mA using a Lolin 32 (wifi on)
-// Display section takes : 10.16 secs to complete at 40mA using a Lolin 32 (wifi off)
-// Sleep current is 175uA using a Lolin 32
-// Total power consumption per-hour based on 2 updates at 30-min intervals = (2x(7.37x119/3600 + 10.16x40/3600) + 0.15 x (3600-2x(7.37+10.16))/3600)/3600 = 0.887mAHr 
-// A 2600mAhr battery will last for 2600/0.88 = 122 days 
-
-// using his math, andymule does this: (TODO andymule didnt really check this dudes math)
-// A 1000mAhr battery will last 1000/2600 * 122days = 47 days
-// updating 3 times a day instead of 48 = 48/3*47 = 752 days OR 2.11 years
-
-//#########################################################################################
+// TODO andymule ON RELEASE Disabling all logging but keeping the UART disable pin high only increased boot time by around 20 ms.
 void setup() {
 	Serial.begin(128000);
+
+	struct timeval now;
+	gettimeofday(&now, NULL);
+	int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
+
+	// Определение, по какому событию проснулись
+	switch (esp_sleep_get_wakeup_cause()) {
+	case ESP_SLEEP_WAKEUP_TIMER: {
+		//Serial.println();
+		Serial.print("Wake up from timer. Time spent in deep sleep: ");
+		Serial.print(sleep_time_ms);
+		Serial.println(" ms");
+		//Serial.println();
+		break;
+	}
+	case ESP_SLEEP_WAKEUP_UNDEFINED:
+	default: {
+		//Serial.println();
+		Serial.println("Not a deep sleep reset");
+		//Serial.println();
+		memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);
+	}
+	}
+
 	wifisection = millis();
 	StartWiFi();
-	//SetupTime();
 	lastConnectionTime = millis();
 
-	http.begin(yahoo); //Specify the URL
-	int httpCode = http.GET();
+	geolocatehttp.begin(geolocatestring); //Specify the URL
+	int geoHttpCode = geolocatehttp.GET();
 
-	if (httpCode == 200)
-	{
-		//StaticJsonBuffer<6000> jsonBuffer;	// we're told to use this, but it doesn't parse so we're using the deprecated dynamicjsonbuffer
+	if (geoHttpCode == 200)
+	{//StaticJsonBuffer<6000> jsonBuffer;	// we're told to use this, but it doesn't parse so we're using the deprecated dynamicjsonbuffer
+		DynamicJsonBuffer  jsonBuffer2(1200);
+		JsonObject& root2 = jsonBuffer2.parseObject(geolocatehttp.getString());
+		geolocate.ip			= root2["ip"].asString();
+		geolocate.city			= root2["city"].asString();
+		geolocate.geoname_id	= root2["geoname_id"];
+		geolocate.lat			= root2["latitude"];
+		geolocate.lon			= root2["longitude"];
+		geolocate.region_code	= root2["region_code"].asString();	//state in USA
+		geolocatehttp.end();
+	}
+	else {
+		Serial.println("Error on Geolocate request");
+		//weathertime = "HTTP ERROR:" + yahooHttpCode;
+		Sleep();
+	}
+	String yahooReal = yahoostring1 + geolocate.city + yahoostring2 + geolocate.region_code + yahoostring3;
+	yahoohttp.begin(yahooReal); //Specify the URL
+	int yahooHttpCode = yahoohttp.GET();
+
+	StopWiFi(); // stop wifi and reduces power consumption
+
+	if (yahooHttpCode == 200)
+	{//StaticJsonBuffer<6000> jsonBuffer;	// we're told to use this, but it doesn't parse so we're using the deprecated dynamicjsonbuffer
 		DynamicJsonBuffer  jsonBuffer(6000);
-		JsonObject& root = jsonBuffer.parseObject(http.getString());
+		JsonObject& root = jsonBuffer.parseObject(yahoohttp.getString());
 		city = root["query"]["results"]["channel"]["location"]["city"];
 		weathertime = root["query"]["results"]["channel"]["lastBuildDate"];
 		//Serial.println(weathertime);
-		ParseIntoWeatherObjects(root);	// TODO andymule maybe can do this after http.end and StopWiFi to save battery???
+		ParseIntoWeatherObjects(root);
+		yahoohttp.end();
 	}
 	else {
-		goto sleep;
-		//weathertime = "HTTP ERROR:" + httpCode;
-		//Serial.println("Error on HTTP request");
+		Serial.println("Error on Weather HTTP request");
+		//weathertime = "HTTP ERROR:" + yahooHttpCode;
+		Sleep();
 	}
-	http.end();
-	StopWiFi(); // stop wifi and reduces power consumption
+
+	wifisection = millis() - wifisection;
+	displaysection = millis();
 	
-	if (httpCode > 0) {
+	// TODO andymule add other output when error 
+	if (yahooHttpCode == 200) {
 		//Received data OK at this point so turn off the WiFi to save power
 		//displaysection = millis();
 		gfx.init();
 		gfx.setRotation(3);
 		gfx.setTextColor(GxEPD_BLACK);
 
+		gfx.setCursor(0,0);
+		gfx.println(geolocate.city);
+
 		gfx.setCursor(gfx.width() / 4, 2);
 		gfx.println(weathertime);
 
-		const GFXfont* font9  = &FreeSans9pt7b;		// TODO andymule use ishac fonts
+		const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
 		const GFXfont* font12 = &FreeSans12pt7b;
 		gfx.setFont(font12);
-		gfx.setCursor(gfx.width()/2-16, 30);
+		gfx.setCursor(gfx.width() / 2 - 16, 30);
 		//gfx.println(WeatherDays[0].DayOfWeek);
 
 		gfx.setFont(font12);
@@ -138,7 +209,7 @@ void setup() {
 		gfx.print(" Low:");
 		gfx.print(WeatherDays[0].Low);
 		//gfx.println(String("°"));	// TODO andymule draw degrees
-		gfx.setCursor(gfx.width()-89, 59);
+		gfx.setCursor(gfx.width() - 89, 59);
 		gfx.print("High:");
 		gfx.print(WeatherDays[0].High);
 		//gfx.println(String("°")); // TODO andymule draw degrees
@@ -149,44 +220,50 @@ void setup() {
 
 		addsun(gfx.width() / 2, 62, 11);	// TODO andymule use bitmap prolly
 
-		DrawDayOfWeek(1);	// TODO andymule not awesome code here, but its fine
-		DrawDayOfWeek(2);
-		DrawDayOfWeek(3);
-		DrawDayOfWeek(4);
-		DrawDayOfWeek(5);
-		DrawDayOfWeek(6);
-		DrawDayOfWeek(7);
+		DrawDaysAhead(6);
 
 		gfx.update();
-		gfx.powerDown();	// saves power probably?? lololol
 	}
-
-	//Serial.println("   Wifi section took: "+ String(wifisection/1000.0)+" secs");
-	//Serial.println("Display section took: "+ String((millis()-displaysection)/1000.0)+" secs");
-
-	sleep:
-		esp_sleep_enable_timer_wakeup(UpdateInterval);
-		esp_deep_sleep_start(); // REALLY DEEP sleep and save power
+	displaysection = millis() - displaysection;
+	Serial.println("Wifi took:	 " + String(wifisection		/ 1000.0) + " secs");
+	Serial.println("Display took:" + String(displaysection	/ 1000.0) + " secs");
+	Sleep();
 }
 
-void DrawDayOfWeek(int daysAfterToday)
+void Sleep()
+{
+	gfx.powerDown();	// saves power probably?? lololol
+	esp_sleep_enable_timer_wakeup(SleepTimeMicroseconds);
+	gettimeofday(&sleep_enter_time, NULL);
+	esp_deep_sleep_start(); // REALLY DEEP sleep and save power
+}
+
+void DrawDaysAhead(int daysAhead)
+{
+	for (int i = 0; i <= daysAhead; i++)
+	{
+		DrawDayOfWeek(i, (gfx.width() / daysAhead), 90, 9);
+	}
+}
+
+void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeight)
 {
 	gfx.setFont();	// resets to default little font guy
-	gfx.setCursor((gfx.width()/7)*(daysAfterToday-1), 90);
+	gfx.setCursor(width*(daysAfterToday - 1), heightStart);
 	gfx.println(WeatherDays[daysAfterToday].DayOfWeek);
-	gfx.setCursor((gfx.width() / 7)*(daysAfterToday - 1), 99);
+	gfx.setCursor(width*(daysAfterToday - 1), heightStart + fontHeight);
 
 	String CheckText = String(WeatherDays[daysAfterToday].Text);
 	String PrintText = String(CheckText);
 	if (CheckText.indexOf(" ") > 0)
 	{
-		PrintText = CheckText.substring(CheckText.lastIndexOf(" ")+1, CheckText.length());
+		PrintText = CheckText.substring(CheckText.lastIndexOf(" ") + 1, CheckText.length());
 	}
 	gfx.println(PrintText);
 
-	gfx.setCursor((gfx.width() / 7)*(daysAfterToday - 1), 108);
+	gfx.setCursor(width*(daysAfterToday - 1), heightStart + fontHeight * 2);
 	gfx.println(WeatherDays[daysAfterToday].High);
-	gfx.setCursor((gfx.width() / 7)*(daysAfterToday - 1), 117);
+	gfx.setCursor(width*(daysAfterToday - 1), heightStart + fontHeight * 3);
 	gfx.println(WeatherDays[daysAfterToday].Low);
 }
 
@@ -199,12 +276,12 @@ void ParseIntoWeatherObjects(JsonObject& root)
 		WeatherDays[i].High = root["query"]["results"]["channel"]["item"]["forecast"][i]["high"];
 		WeatherDays[i].Low = root["query"]["results"]["channel"]["item"]["forecast"][i]["low"];
 		WeatherDays[i].Text = root["query"]["results"]["channel"]["item"]["forecast"][i]["text"];
-		Serial.println(String(i) + ":" +
-			String(WeatherDays[i].Date) + " " +
-			String(WeatherDays[i].DayOfWeek) + " " +
-			String(WeatherDays[i].High) + " " +
-			String(WeatherDays[i].Low) + " " +
-			String(WeatherDays[i].Text));
+		//Serial.println(String(i) + ":" +
+		//	String(WeatherDays[i].Date) + " " +
+		//	String(WeatherDays[i].DayOfWeek) + " " +
+		//	String(WeatherDays[i].High) + " " +
+		//	String(WeatherDays[i].Low) + " " +
+		//	String(WeatherDays[i].Text));
 	}
 }
 
@@ -212,8 +289,7 @@ void loop() { // this will never run!
 	Serial.println("UH OH IN LOOP!");
 	delay(3000);
 	yield;
-	esp_sleep_enable_timer_wakeup(UpdateInterval);
-	esp_deep_sleep_start(); // Sleep for e.g. 30 minutes
+	Sleep();
 }
 
 ////#########################################################################################
@@ -237,19 +313,23 @@ void loop() { // this will never run!
 
 int StartWiFi() {
 	int connAttempts = 0;
-	Serial.print(F("\r\nConnecting to: ")); Serial.println(String(ssid1));
+	Serial.print(F("\r\nConnecting to: "));
+	Serial.println(String(ssid));
 	WiFi.disconnect();
 	WiFi.mode(WIFI_STA);
-	WiFi.begin(ssid1, password1);
+	WiFi.begin(ssid, password);
+	//WiFi.waitForConnectResult();
+	//WiFi.setAutoReconnect(true);
 	while (WiFi.status() != WL_CONNECTED) {
 		delay(500); Serial.print(F("."));
-		if (connAttempts > 5) {
+		if (connAttempts > 15) {
+			Serial.println("WiFi down? Failed to connect");
 			// wifi prolly down, try again later
-			esp_sleep_enable_timer_wakeup(UpdateInterval);
-			esp_deep_sleep_start(); 
+			Sleep();
 		}
 		connAttempts++;
 	}
+
 	Serial.println("WiFi connected at: " + String(WiFi.localIP()));
 	return 1;
 }
@@ -257,7 +337,6 @@ int StartWiFi() {
 void StopWiFi() {
 	WiFi.disconnect();
 	WiFi.mode(WIFI_OFF);
-	wifisection = millis() - wifisection;
 	Serial.println("Wifi Off");
 }
 
@@ -327,21 +406,21 @@ void addsun(int x, int y, int scale) {
 		dyo = 2.2*scale * sin((i - 90)*3.14 / 180); dyi = dyo * 0.6;
 		if (i == 0 || i == 180) {
 			gfx.drawLine(dxo + x - 1, dyo + y, dxi + x - 1, dyi + y, GxEPD_BLACK);
-			if (scale  > 30) {
+			if (scale > 30) {
 				gfx.drawLine(dxo + x + 0, dyo + y, dxi + x + 0, dyi + y, GxEPD_BLACK);
 				gfx.drawLine(dxo + x + 1, dyo + y, dxi + x + 1, dyi + y, GxEPD_BLACK);
 			}
 		}
 		if (i == 90 || i == 270) {
 			gfx.drawLine(dxo + x, dyo + y - 1, dxi + x, dyi + y - 1, GxEPD_BLACK);
-			if (scale  > 30) {
+			if (scale > 30) {
 				gfx.drawLine(dxo + x, dyo + y + 0, dxi + x, dyi + y + 0, GxEPD_BLACK);
 				gfx.drawLine(dxo + x, dyo + y + 1, dxi + x, dyi + y + 1, GxEPD_BLACK);
 			}
 		}
 		if (i == 45 || i == 135 || i == 225 || i == 315) {
 			gfx.drawLine(dxo + x - 1, dyo + y, dxi + x - 1, dyi + y, GxEPD_BLACK);
-			if (scale  > 30) {
+			if (scale > 30) {
 				gfx.drawLine(dxo + x + 0, dyo + y, dxi + x + 0, dyi + y, GxEPD_BLACK);
 				gfx.drawLine(dxo + x + 1, dyo + y, dxi + x + 1, dyi + y, GxEPD_BLACK);
 			}
