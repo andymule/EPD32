@@ -46,6 +46,9 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include <sstream>
+#include <string>
+
 const char* ssid = "ohm";
 const char* password = "shesthebest";
 
@@ -58,17 +61,44 @@ unsigned long lastConnectionTime = 0;          // Last time you connected to the
 const uint64_t OneMinute = 60000000LL;	/*6000000 uS = 1 minute*/
 const uint64_t MinutesInAnHour = 60LL;		/*60 min = 1 hour*/
 // TODO andymule this number weirdly lets me wake up every 6 hours or so ? This hasn't proven true and needs more work
-const uint64_t SleepTimeMicroseconds = OneMinute * 1;//MinutesInAnHour * 2LL;
+const uint64_t SleepTimeMicroseconds = OneMinute * MinutesInAnHour * 2LL;
+
+/*
+NOTE:
+======
+Only RTC IO can be used as a source for external wake
+source. They are pins: 0,2,4,12-15,25-27,32-39.
+*/
+// TODO wake oncaptouch, possible gestures?
+// https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/DeepSleep/ExternalWakeUp/ExternalWakeUp.ino
+// https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/DeepSleep/TouchWakeUp/TouchWakeUp.ino
+
+/*
+//https://github.com/Serpent999/ESP32_Touch_LED/blob/master/Touch_LED/Touch_LED.ino //WEIRD example of touch? might be useful
+Touch Sensor Pin Layout
+T0 = GPIO4
+T1 = GPIO0
+T2 = GPIO2
+T3 = GPIO15
+T4 = GPIO13
+T5 = GPIO12
+T6 = GPIO14
+T7 = GPIO27
+T8 = GPIO33
+T9 = GPIO32 */
 
 // RTC_DATA_ATTR marks variables to be saved across sleep
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
 
-// TODO grab location from IP, for now it's this hard string to Seattle
+// here is original string
+// https://query.yahooapis.com/v1/public/yql?q=select%20*%20from%20weather.forecast%20where%20woeid%20in%20(select%20woeid%20from%20geo.places(1)%20where%20text%3D%22seattle%2C%20wa%22)&format=json&env=store%3A%2F%2Fdatatables.org%2Falltableswithkeys
+
 const String yahoostring1 = "https://query.yahooapis.com/v1/public/yql?q=select%20*%20from%20weather.forecast%20where%20woeid%20in%20(select%20woeid%20from%20geo.places(1)%20where%20text%3D%22";
-String yahoostringCity;
+//String yahoostringCity;
 const String yahoostring2 = "%2C%20";
-String yahoostringState;
+//String yahoostringState;
 const String yahoostring3 = "%22)&format=json&env=store%3A%2F%2Fdatatables.org%2Falltableswithkeys";
+
 const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8&format=1";
 
 HTTPClient yahoohttp;
@@ -82,7 +112,7 @@ public:
 	String city;
 	String region_code;
 	float lat, lon;
-	int geoname_id;
+	int geoname_id;	//www.geonames.org/5809844  TODO use GEOID for stuff?? Make own GeoID lookup service? jeez
 };
 Geolocate geolocate;
 
@@ -116,6 +146,14 @@ void setup() {
 	gettimeofday(&now, NULL);
 	int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
 
+	uint64_t wakeupBit = esp_sleep_get_ext1_wakeup_status();
+	if (wakeupBit & GPIO_SEL_33) {
+		// GPIO 33 woke up
+	}
+	else if (wakeupBit & GPIO_SEL_34) {
+		// GPIO 34
+	}
+
 	// Определение, по какому событию проснулись
 	switch (esp_sleep_get_wakeup_cause()) {
 	case ESP_SLEEP_WAKEUP_TIMER: {
@@ -123,6 +161,10 @@ void setup() {
 		Serial.print("Wake up from timer. Time spent in deep sleep: ");
 		Serial.print(sleep_time_ms);
 		Serial.println(" ms");
+		WiFi.disconnect();
+		//WiFi.mode(WIFI_OFF); 
+		//esp_wifi_start();	// need to manually power up?? IDK BUG on 2 hour deep sleep
+		//esp_wifi_stop();
 		//Serial.println();
 		break;
 	}
@@ -159,6 +201,10 @@ void setup() {
 		//weathertime = "HTTP ERROR:" + yahooHttpCode;
 		Sleep();
 	}
+	
+	geolocate.city.replace(" ", "%20");
+	geolocate.region_code.replace(" ", "%20");
+
 	String yahooReal = yahoostring1 + geolocate.city + yahoostring2 + geolocate.region_code + yahoostring3;
 	yahoohttp.begin(yahooReal); //Specify the URL
 	int yahooHttpCode = yahoohttp.GET();
@@ -233,9 +279,29 @@ void setup() {
 void Sleep()
 {
 	gfx.powerDown();	// saves power probably?? lololol
-	esp_sleep_enable_timer_wakeup(SleepTimeMicroseconds);
+	int result = esp_sleep_enable_timer_wakeup(SleepTimeMicroseconds);
+	std::ostringstream ss;
+	ss << SleepTimeMicroseconds;
+	if (result == ESP_ERR_INVALID_ARG)
+	{
+		Serial.print("FAILED to sleep:");
+		Serial.println(ss.str().c_str());
+	}
+	else
+	{
+		Serial.print("SUCCESS SLEEPING:");
+		Serial.println(ss.str().c_str());
+	}
 	gettimeofday(&sleep_enter_time, NULL);
+	EnableWakeOnTilt();	// here so we always have more current orientation when setting our interupts 
 	esp_deep_sleep_start(); // REALLY DEEP sleep and save power
+}
+
+void EnableWakeOnTilt()
+{
+	// TODO andymule detect current orientation and set interupts accordingly
+	esp_sleep_enable_ext1_wakeup(GPIO_NUM_33, ESP_EXT1_WAKEUP_ANY_HIGH);
+	esp_sleep_enable_ext0_wakeup(GPIO_NUM_34, ESP_EXT1_WAKEUP_ANY_HIGH);
 }
 
 void DrawDaysAhead(int daysAhead)
@@ -322,9 +388,10 @@ int StartWiFi() {
 	//WiFi.setAutoReconnect(true);
 	while (WiFi.status() != WL_CONNECTED) {
 		delay(500); Serial.print(F("."));
-		if (connAttempts > 15) {
-			Serial.println("WiFi down? Failed to connect");
+		if (connAttempts > 20) {	// give it 10 seconds
+			Serial.println("WiFi down? Failed to connect. RESTARTING DEVICE?");
 			// wifi prolly down, try again later
+			ESP.restart();	// TODO is this best?
 			Sleep();
 		}
 		connAttempts++;
@@ -337,6 +404,7 @@ int StartWiFi() {
 void StopWiFi() {
 	WiFi.disconnect();
 	WiFi.mode(WIFI_OFF);
+	esp_wifi_stop();
 	Serial.println("Wifi Off");
 }
 
