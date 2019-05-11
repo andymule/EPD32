@@ -1,9 +1,10 @@
+#include <ArduinoJson.hpp>
 #include <gfxfont.h>
 #include <Adafruit_SPITFT_Macros.h>
 #include <Adafruit_SPITFT.h>
 #include <Adafruit_GFX.h>
 #include <GxEPD.h>
-#include <GxGDEH029A1/GxGDEH029A1.cpp>
+#include <GxGDEH029A1/GxGDEH029A1.cpp>	// our resolution is 128px x 296px, or 37888
 #include <GxIO/GxIO_SPI/GxIO_SPI.cpp>
 #include <GxIO/GxIO.cpp>
 /* include any other fonts you want to use https://github.com/adafruit/Adafruit-GFX-Library */
@@ -15,42 +16,30 @@
 #include <ArduinoJson.h>
 #include <SPI.h>
 
-// this code is for ESP32, but should work just as well on ESP8266
-#if defined(ESP8266)
-#include <ESP8266WiFi.h>          
-#else
-#include <WiFi.h>          
-#endif
-
+#include <pgmspace.h>
+#include <esp_wifi.h>
 #include <DNSServer.h>
-#if defined(ESP8266)
-#include <ESP8266WebServer.h>
-#include <ESP8266HTTPUpdateServer.h>
-#else
-#include <WebServer.h>
-#include <ESP32httpUpdate.h>
-#endif
-
 #include <HTTPClient.h>
-#include <WiFiManager.h> 
-#include <WiFiClient.h>
 
 #include "time.h"
-#include <rom/rtc.h>
-
-#include <sys/time.h>
 #include "esp32/ulp.h"
-//#include "esp_deep_sleep.h"
-#include "esp_sleep.h"
-#include "driver/rtc_io.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 
 #include <sstream>
 #include <string>
+#include <vector>
 
-const char* ssid = "ohm";
-const char* password = "shesthebest";
+//#include "Icon1.h"
+//#include "testimage.h"
+#include "Icon2.h"
+
+#if CONFIG_FREERTOS_UNICORE
+#define ARDUINO_RUNNING_CORE 0
+#else
+#define ARDUINO_RUNNING_CORE 1
+#endif
+
+const char* ssid = "slow";
+const char* password = "bingbangbong";
 
 GxIO_Class io(SPI, /*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16);	// arbitrary selection of 17, 16
 GxEPD_Class gfx(io, /*RST=*/ 16, /*BUSY=*/ 4);				 // arbitrary selection of (16), 4
@@ -58,10 +47,14 @@ GxEPD_Class gfx(io, /*RST=*/ 16, /*BUSY=*/ 4);				 // arbitrary selection of (16
 unsigned long lastConnectionTime = 0;          // Last time you connected to the server, in milliseconds
 // 1000000LL is one second
 
-const uint64_t OneMinute = 60000000LL;	/*6000000 uS = 1 minute*/
-const uint64_t MinutesInAnHour = 60LL;		/*60 min = 1 hour*/
-// TODO andymule this number weirdly lets me wake up every 6 hours or so ? This hasn't proven true and needs more work
-const uint64_t SleepTimeMicroseconds = OneMinute * MinutesInAnHour * 2LL;
+const uint64_t OneSecond = 1000000LL;
+const uint64_t Time60 = 60LL;		/*60 min = 1 hour*/
+const uint64_t OneMinute = OneSecond * Time60;	/*6000000 uS = 1 minute*/
+const uint64_t OneHour   = OneMinute * Time60;	/*6000000 uS = 1 minute*/
+// TODO andymule this number weirdly lets me wake up every 12 hours or so ? This hasn't proven true and needs more work
+
+const uint64_t SleepTimeMicroseconds = OneHour;
+//const uint64_t SleepTimeMicroseconds = OneMinute * MinutesInAnHour * 24LL;
 
 /*
 NOTE:
@@ -72,6 +65,10 @@ source. They are pins: 0,2,4,12-15,25-27,32-39.
 // TODO wake oncaptouch, possible gestures?
 // https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/DeepSleep/ExternalWakeUp/ExternalWakeUp.ino
 // https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/DeepSleep/TouchWakeUp/TouchWakeUp.ino
+
+#define Threshold 100 /* Greater the value, more the sensitivity */
+RTC_DATA_ATTR int bootCount = 0;
+touch_pad_t touchPin;
 
 /*
 //https://github.com/Serpent999/ESP32_Touch_LED/blob/master/Touch_LED/Touch_LED.ino //WEIRD example of touch? might be useful
@@ -90,20 +87,22 @@ T9 = GPIO32 */
 // RTC_DATA_ATTR marks variables to be saved across sleep
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
 
-// here is original string
-// https://query.yahooapis.com/v1/public/yql?q=select%20*%20from%20weather.forecast%20where%20woeid%20in%20(select%20woeid%20from%20geo.places(1)%20where%20text%3D%22seattle%2C%20wa%22)&format=json&env=store%3A%2F%2Fdatatables.org%2Falltableswithkeys
+// original string:
+// http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=59.3307&lon=18.0718&units=metric
 
-const String yahoostring1 = "https://query.yahooapis.com/v1/public/yql?q=select%20*%20from%20weather.forecast%20where%20woeid%20in%20(select%20woeid%20from%20geo.places(1)%20where%20text%3D%22";
-//String yahoostringCity;
-const String yahoostring2 = "%2C%20";
-//String yahoostringState;
-const String yahoostring3 = "%22)&format=json&env=store%3A%2F%2Fdatatables.org%2Falltableswithkeys";
+const String weatherString1 = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
+const String latlat = "59.3307";
+const String weatherString2 = "&lon=";
+const String lonlon = "18.0718";
+const String weatherString3Metric = "&units=metric";
+const String weatherString3Imperial = "&units=imperial";
 
-const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8&format=1";
+const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8";
+//const String geolocatestring2 = "http://api.ipstack.com/check?access_key=ab925796fd105310f825bbdceece059e";
 
-HTTPClient yahoohttp;
+HTTPClient weatherhttp;
 HTTPClient geolocatehttp;
-WiFiClient client; // wifi client object
+WiFiClient client; 
 
 class Geolocate
 {
@@ -117,9 +116,11 @@ public:
 Geolocate geolocate;
 
 const char* city;
-const char* weathertime;
+String CurrentDateTimeString;
+int CurrentTimeInMinutesIfMidnightWereZeroMinutes;
 int    wifisection, displaysection;
 int Sunrise, Sunset;
+int CurrentTemp;
 
 class WeatherDay
 {
@@ -134,6 +135,11 @@ public:
 };
 
 WeatherDay WeatherDays[10] = {};
+
+// useful tools, like bitmap converter, fonts, and font converters
+// https://github.com/cesanta/arduino-drivers/tree/master/Adafruit-GFX-Library
+#include GxEPD_BitmapExamples
+// 
 
 //const int width = 296;
 //const int height = 128;
@@ -154,97 +160,218 @@ void setup() {
 		// GPIO 34
 	}
 
-	// Определение, по какому событию проснулись
-	switch (esp_sleep_get_wakeup_cause()) {
-	case ESP_SLEEP_WAKEUP_TIMER: {
-		//Serial.println();
-		Serial.print("Wake up from timer. Time spent in deep sleep: ");
-		Serial.print(sleep_time_ms);
-		Serial.println(" ms");
-		WiFi.disconnect();
-		//WiFi.mode(WIFI_OFF); 
-		//esp_wifi_start();	// need to manually power up?? IDK BUG on 2 hour deep sleep
-		//esp_wifi_stop();
-		//Serial.println();
-		break;
+	esp_sleep_wakeup_cause_t wakeup_reason;
+	wakeup_reason = esp_sleep_get_wakeup_cause();
+	switch (wakeup_reason) {
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TIMER: {
+			//Serial.println();
+			gfx.init();
+			gfx.eraseDisplay(true);
+			gfx.eraseDisplay();
+			Serial.print("Wake up from timer. Time spent in deep sleep: ");
+			Serial.print(sleep_time_ms);
+			Serial.println(" ms");
+			WiFi.disconnect();
+			//WiFi.mode(WIFI_OFF); 
+			//esp_wifi_start();	// need to manually power up?? IDK BUG on 2 hour deep sleep
+			//esp_wifi_stop();
+			//Serial.println();
+			break;
+		}
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_GPIO:
+		{
+			Serial.println("Wakeup caused by GPIO"); break;
+		}
+		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_UART:
+		{
+			Serial.println("Wakeup caused by UART??"); break;
+		}
+		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TOUCHPAD:
+		{
+			gfx.init();
+			Serial.println("Wakeup caused by touchpad"); break;
+		}
+		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_ULP: Serial.println("Wakeup caused by ULP program"); break;
+		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_EXT0: Serial.println("Wakeup caused by EXT0"); break;
+		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_EXT1: Serial.println("Wakeup caused by EXT1"); break;
+		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_UNDEFINED:
+		default: {
+			//Serial.println();
+			gfx.init();
+			gfx.eraseDisplay(true);
+			gfx.eraseDisplay();
+			Serial.println("Not a deep sleep reset");
+			//Serial.println();
+			memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);
+		}
 	}
-	case ESP_SLEEP_WAKEUP_UNDEFINED:
-	default: {
-		//Serial.println();
-		Serial.println("Not a deep sleep reset");
-		//Serial.println();
-		memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);
-	}
-	}
+	//Icon1
+	//gfx.drawBitmap(BitmapExample1, sizeof(BitmapExample1), gfx.bm_default);
+	//Serial.println(":1");
+	//gfx.drawBitmap(gImage_Icon2, sizeof(gImage_Icon2), gfx.bm_default);
+	//delay(5000);
+	//gfx.drawPicture(Icon1, sizeof(Icon1));
+	//sleep(1000);
+	//delay(5000);
+	//Serial.println(":2");
+	//gfx.powerDown();
+	//gfx.powerUp();
+	gfx.setRotation(3);
+	gfx.setTextColor(GxEPD_BLACK);
+	//uint16_t box_y = 0;
+	//uint16_t box_h = gfx.height();
+	//uint16_t box_h = 10;
+	//uint16_t cursor_y = box_y + 16;
+	const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
+	gfx.setFont(font9);
+	gfx.setCursor(3, 30);
+	gfx.println("UPDATING");
+	gfx.updateWindow(0, 18, 120, 17, true);
+	gfx.fillRect(0, 15, 120, 17, GxEPD_WHITE);	// cover it up though
+	gfx.setFont();
+	Serial.println(":3");
+	//uint16_t box_x = 20;
+	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_BLACK);
+	//gfx.updateWindow(box_x, 0, 5, gfx.height(), true);
+	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_WHITE);
 
+
+	gfx.setCursor(0, 0);
+	//gfx.fillRect(box_x, box_y, box_w, box_h, GxEPD_WHITE);	// cover it up though
 	wifisection = millis();
+	//xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
+	//vTaskDelete(StartWiFi);
 	StartWiFi();
+	//	gfx.drawBitmap(bwBitmap640x384_1, (GxEPD_WIDTH - 640) / 2, (GxEPD_HEIGHT - 384) / 2, 640, 384, GxEPD_BLACK);
+
 	lastConnectionTime = millis();
 
 	geolocatehttp.begin(geolocatestring); //Specify the URL
 	int geoHttpCode = geolocatehttp.GET();
 
+	//box_x = 40;
+	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_BLACK);
+	//gfx.updateWindow(box_x, 0, 5, gfx.height(), true);
+	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_WHITE);
+	
 	if (geoHttpCode == 200)
 	{//StaticJsonBuffer<6000> jsonBuffer;	// we're told to use this, but it doesn't parse so we're using the deprecated dynamicjsonbuffer
-		DynamicJsonBuffer  jsonBuffer2(1200);
-		JsonObject& root2 = jsonBuffer2.parseObject(geolocatehttp.getString());
-		geolocate.ip			= root2["ip"].asString();
-		geolocate.city			= root2["city"].asString();
-		geolocate.geoname_id	= root2["geoname_id"];
-		geolocate.lat			= root2["latitude"];
-		geolocate.lon			= root2["longitude"];
-		geolocate.region_code	= root2["region_code"].asString();	//state in USA
+		StaticJsonDocument<1200> doc;
+		//DynamicJsonBuffer  jsonBuffer2(1200);
+		Serial.println("bytes1:" + geolocatehttp.getSize());
+		DeserializationError error = deserializeJson(doc, geolocatehttp.getString().c_str() );
+		if (error) {
+			Serial.print(F("deserializeJson() failed 1 : "));
+			Serial.println(error.c_str());
+			Sleep();
+		}
+		geolocate.ip = doc["ip"].as<String>();
+		geolocate.city = doc["city"].as<String>();
+		geolocate.geoname_id = doc["geoname_id"];
+		geolocate.lat = doc["latitude"];
+		geolocate.lon = doc["longitude"];
+		geolocate.region_code = doc["region_code"].as<String>();	//state in USA?
 		geolocatehttp.end();
 	}
 	else {
 		Serial.println("Error on Geolocate request");
-		//weathertime = "HTTP ERROR:" + yahooHttpCode;
 		Sleep();
 	}
-	
+
 	geolocate.city.replace(" ", "%20");
 	geolocate.region_code.replace(" ", "%20");
 
-	String yahooReal = yahoostring1 + geolocate.city + yahoostring2 + geolocate.region_code + yahoostring3;
-	yahoohttp.begin(yahooReal); //Specify the URL
-	int yahooHttpCode = yahoohttp.GET();
+	String weatherCall = weatherString1 + geolocate.lat + weatherString2 + geolocate.lon + weatherString3Metric;
+	weatherhttp.begin(weatherCall); //Specify the URL
+	int weatherHttpCode = weatherhttp.GET();
+
+	//box_x = 60;
+	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_BLACK);
+	//gfx.updateWindow(box_x, 0, 5, gfx.height(), true);
+	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_WHITE);
 
 	StopWiFi(); // stop wifi and reduces power consumption
 
-	if (yahooHttpCode == 200)
+	if (weatherHttpCode == 200)
 	{//StaticJsonBuffer<6000> jsonBuffer;	// we're told to use this, but it doesn't parse so we're using the deprecated dynamicjsonbuffer
-		DynamicJsonBuffer  jsonBuffer(6000);
-		JsonObject& root = jsonBuffer.parseObject(yahoohttp.getString());
-		city = root["query"]["results"]["channel"]["location"]["city"];
-		weathertime = root["query"]["results"]["channel"]["lastBuildDate"];
-		//Serial.println(weathertime);
-		ParseIntoWeatherObjects(root);
-		yahoohttp.end();
+		StaticJsonDocument<6000> root;
+		Serial.println("bytes2:" + weatherhttp.getSize());
+		DeserializationError error = deserializeJson(root, weatherhttp.getString().c_str() );
+		
+		if (error) {
+			Serial.print(F("deserializeJson() failed22: "));
+			Serial.println(error.c_str());
+			Sleep();
+		}
+
+		city = root["name"];
+		CurrentTemp = root["main"]["temp"];
+		long temp = root["dt"].as<long>();
+		//tm NTPstamp = 
+		// TODO move this math out
+		//time_t utcCalc = NTPstamp - 2208988800UL;
+		//Serial.println("m:"+NTPstamp.tm_mday);
+		//Serial.println("w:" + NTPstamp.tm_wday);
+		//Serial.println(minute(utcCalc));
+
+		//const char* datetime = root["query"]["results"]["channel"]["lastBuildDate"];
+		//CurrentDateTimeString = String(datetime);
+
+		//split on 4 and 6 space index to get time and AM or PM
+		//CurrentDateTime.substring(CurrentDateTime.indexOf
+		//Thu, 09 Aug 2018 11:34 PM PDT
+		//String CurrentTime = "00:00\0";
+		//String CurrentAMorPM = "XX\0";
+		//char *p = strtok(const_cast<char*>(datetime), " ");
+		//int countEm = 0;
+		//while (p) {
+		//	//printf("Token: %s\n", p);
+		//	if (countEm == 4)
+		//	{
+		//		CurrentTime = String(p);
+		//		Serial.print(CurrentTime);
+		//	}
+		//	else if (countEm == 5)
+		//	{
+		//		CurrentAMorPM = String(p);
+		//		Serial.println(CurrentAMorPM);
+		//	}
+		//	++countEm;
+		//	p = strtok(NULL, " ");
+		//}
+
+		//Serial.println(CurrentDateTime);
+
+		//ParseIntoWeatherObjects(root);
+		
+		
+		
+
+		weatherhttp.end();
 	}
 	else {
 		Serial.println("Error on Weather HTTP request");
-		//weathertime = "HTTP ERROR:" + yahooHttpCode;
+		//CurrentDateTime = "HTTP ERROR:" + weatherHttpCode;
 		Sleep();
 	}
 
 	wifisection = millis() - wifisection;
 	displaysection = millis();
-	
+	Serial.println("Parsed weather");
 	// TODO andymule add other output when error 
-	if (yahooHttpCode == 200) {
+	if (weatherHttpCode == 200) {
 		//Received data OK at this point so turn off the WiFi to save power
 		//displaysection = millis();
-		gfx.init();
-		gfx.setRotation(3);
-		gfx.setTextColor(GxEPD_BLACK);
 
-		gfx.setCursor(0,0);
+		//gfx.eraseDisplay();
+		//gfx.eraseDisplay(true);
+		//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+		gfx.setCursor(0, 0);
 		gfx.println(geolocate.city);
 
 		gfx.setCursor(gfx.width() / 4, 2);
-		gfx.println(weathertime);
+		gfx.println(CurrentDateTimeString);
 
-		const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
 		const GFXfont* font12 = &FreeSans12pt7b;
 		gfx.setFont(font12);
 		gfx.setCursor(gfx.width() / 2 - 16, 30);
@@ -261,18 +388,28 @@ void setup() {
 		//gfx.println(String("°")); // TODO andymule draw degrees
 
 		gfx.setFont(font9);
-		gfx.setCursor(gfx.width() / 2 - 26, 30);
+		gfx.setCursor(gfx.width() / 2 - 26, 79);
 		gfx.println(WeatherDays[0].Text);
 
-		addsun(gfx.width() / 2, 62, 11);	// TODO andymule use bitmap prolly
+		gfx.setFont(font12);
+		gfx.setCursor(gfx.width() / 2 - 15, 30);
+		gfx.println(CurrentTemp);
+
+		addsun(gfx.width() / 2, 52, 7);	// TODO andymule use bitmap prolly
 
 		DrawDaysAhead(6);
 
-		gfx.update();
+		//gfx.drawPicture
+		//gfx.drawBitmap(20, 20, Icon1, 32, 32, GxEPD_BLACK);
+		//gfx.drawBitmap(Icon1, (GxEPD_WIDTH - 640) / 2, (GxEPD_HEIGHT - 384) / 2, 640, 384, GxEPD_BLACK);
+		//gfx.drawBitmap(bwBitmap640x384_1, (GxEPD_WIDTH - 640) / 2, (GxEPD_HEIGHT - 384) / 2, 640, 384, GxEPD_BLACK);
+
+		//gfx.update();
+		gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
 	}
 	displaysection = millis() - displaysection;
-	Serial.println("Wifi took:	 " + String(wifisection		/ 1000.0) + " secs");
-	Serial.println("Display took:" + String(displaysection	/ 1000.0) + " secs");
+	Serial.println("Wifi took:	 " + String(wifisection / 1000.0) + " secs");
+	Serial.println("Display took:" + String(displaysection / 1000.0) + " secs");
 	Sleep();
 }
 
@@ -280,28 +417,36 @@ void Sleep()
 {
 	gfx.powerDown();	// saves power probably?? lololol
 	int result = esp_sleep_enable_timer_wakeup(SleepTimeMicroseconds);
-	std::ostringstream ss;
-	ss << SleepTimeMicroseconds;
+	//std::ostringstream ss;
+	//ss << SleepTimeMicroseconds;
 	if (result == ESP_ERR_INVALID_ARG)
 	{
 		Serial.print("FAILED to sleep:");
-		Serial.println(ss.str().c_str());
+		//Serial.println(ss.str().c_str());
 	}
 	else
 	{
 		Serial.print("SUCCESS SLEEPING:");
-		Serial.println(ss.str().c_str());
+		//Serial.println(ss.str().c_str());
 	}
 	gettimeofday(&sleep_enter_time, NULL);
-	EnableWakeOnTilt();	// here so we always have more current orientation when setting our interupts 
+	//EnableWakeOnTilt();	// actually allows wake on pin touch???
 	esp_deep_sleep_start(); // REALLY DEEP sleep and save power
+}
+
+void touchpadCallback() {
+	Serial.println("TOUCHPAD CALLBACK");
 }
 
 void EnableWakeOnTilt()
 {
 	// TODO andymule detect current orientation and set interupts accordingly
-	esp_sleep_enable_ext1_wakeup(GPIO_NUM_33, ESP_EXT1_WAKEUP_ANY_HIGH);
-	esp_sleep_enable_ext0_wakeup(GPIO_NUM_34, ESP_EXT1_WAKEUP_ANY_HIGH);
+	//esp_sleep_enable_ext1_wakeup(T1, ESP_EXT1_WAKEUP_ANY_HIGH);
+	//esp_sleep_enable_ext0_wakeup(T1, ESP_EXT1_WAKEUP_ANY_HIGH);
+	//touchAttachInterrupt(T1, touchpadCallback, Threshold);
+	touchAttachInterrupt(T2, touchpadCallback, Threshold);
+	esp_sleep_enable_touchpad_wakeup();
+	//(uint32_t)esp_sleep_get_touchpad_wakeup_status();
 }
 
 void DrawDaysAhead(int daysAhead)
@@ -377,7 +522,7 @@ void loop() { // this will never run!
 //}
 ////#########################################################################################
 
-int StartWiFi() {
+void StartWiFi() {
 	int connAttempts = 0;
 	Serial.print(F("\r\nConnecting to: "));
 	Serial.println(String(ssid));
@@ -391,14 +536,12 @@ int StartWiFi() {
 		if (connAttempts > 20) {	// give it 10 seconds
 			Serial.println("WiFi down? Failed to connect. RESTARTING DEVICE?");
 			// wifi prolly down, try again later
-			ESP.restart();	// TODO is this best?
+			ESP.restart();	// TODO handle no wifi or can't connect better than this
 			Sleep();
 		}
 		connAttempts++;
 	}
-
 	Serial.println("WiFi connected at: " + String(WiFi.localIP()));
-	return 1;
 }
 //#########################################################################################
 void StopWiFi() {
