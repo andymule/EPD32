@@ -1,4 +1,7 @@
-#include <ArduinoJson.hpp>
+// TODO investigate multicore usage
+
+#define ARDUINOJSON_DECODE_UNICODE 1
+#include <ArduinoJson.h>
 #include <gfxfont.h>
 #include <Adafruit_SPITFT_Macros.h>
 #include <Adafruit_SPITFT.h>
@@ -87,20 +90,23 @@ T9 = GPIO32 */
 // RTC_DATA_ATTR marks variables to be saved across sleep
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
 
+//const String lonlon = "18.0718";
+//const String latlat = "59.3307";
+
 // original string:
 // http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=59.3307&lon=18.0718&units=metric
 
-const String weatherString1 = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
-const String latlat = "59.3307";
-const String weatherString2 = "&lon=";
-const String lonlon = "18.0718";
-const String weatherString3Metric = "&units=metric";
-const String weatherString3Imperial = "&units=imperial";
+const String weatherCurrent = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
+const String weatherAndLon = "&lon=";
+const String weatherAndMetric = "&units=metric";
+const String weatherAndImperial = "&units=imperial";
+const String weather6Day = "http://api.openweathermap.org/data/2.5/forecast/daily?&appid=ba42e4a918f7e742d3143c5e8fff9210&cnt=7&lat=";
 
 const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8";
 //const String geolocatestring2 = "http://api.ipstack.com/check?access_key=ab925796fd105310f825bbdceece059e";
 
-HTTPClient weatherhttp;
+HTTPClient weathercurrenthttp;
+HTTPClient weather6dayhttp;
 HTTPClient geolocatehttp;
 WiFiClient client; 
 
@@ -241,12 +247,18 @@ void setup() {
 	wifisection = millis();
 	//xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
 	//vTaskDelete(StartWiFi);
+
+	geolocatehttp.begin(geolocatestring); //Specify the URL
+	StaticJsonDocument<900> geoDoc;
+	StaticJsonDocument<900> weatherCurrentDoc;
+	StaticJsonDocument<900> weather6Doc;
+
+
 	StartWiFi();
 	//	gfx.drawBitmap(bwBitmap640x384_1, (GxEPD_WIDTH - 640) / 2, (GxEPD_HEIGHT - 384) / 2, 640, 384, GxEPD_BLACK);
 
 	lastConnectionTime = millis();
 
-	geolocatehttp.begin(geolocatestring); //Specify the URL
 	int geoHttpCode = geolocatehttp.GET();
 
 	//box_x = 40;
@@ -255,22 +267,23 @@ void setup() {
 	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_WHITE);
 	
 	if (geoHttpCode == 200)
-	{//StaticJsonBuffer<6000> jsonBuffer;	// we're told to use this, but it doesn't parse so we're using the deprecated dynamicjsonbuffer
-		StaticJsonDocument<1200> doc;
-		//DynamicJsonBuffer  jsonBuffer2(1200);
-		Serial.println("bytes1:" + geolocatehttp.getSize());
-		DeserializationError error = deserializeJson(doc, geolocatehttp.getString().c_str() );
+	{
+		//StaticJsonBuffer<6000> jsonBuffer;	// we're told to use this, but it doesn't parse so we're using the
+		String temp = geolocatehttp.getString(); // TODO remove to optimize
+		Serial.println("bytes1:");
+		Serial.println(temp.length());
+		DeserializationError error = deserializeJson(geoDoc, temp.c_str() );
 		if (error) {
 			Serial.print(F("deserializeJson() failed 1 : "));
 			Serial.println(error.c_str());
 			Sleep();
 		}
-		geolocate.ip = doc["ip"].as<String>();
-		geolocate.city = doc["city"].as<String>();
-		geolocate.geoname_id = doc["geoname_id"];
-		geolocate.lat = doc["latitude"];
-		geolocate.lon = doc["longitude"];
-		geolocate.region_code = doc["region_code"].as<String>();	//state in USA?
+		geolocate.ip = geoDoc["ip"].as<String>();
+		geolocate.city = geoDoc["city"].as<String>();
+		geolocate.geoname_id = geoDoc["geoname_id"];
+		geolocate.lat = geoDoc["latitude"];
+		geolocate.lon = geoDoc["longitude"];
+		geolocate.region_code = geoDoc["region_code"].as<String>();	//state in USA?
 		geolocatehttp.end();
 	}
 	else {
@@ -281,9 +294,15 @@ void setup() {
 	geolocate.city.replace(" ", "%20");
 	geolocate.region_code.replace(" ", "%20");
 
-	String weatherCall = weatherString1 + geolocate.lat + weatherString2 + geolocate.lon + weatherString3Metric;
-	weatherhttp.begin(weatherCall); //Specify the URL
-	int weatherHttpCode = weatherhttp.GET();
+	String weatherCall = weatherCurrent + geolocate.lat + weatherAndLon + geolocate.lon + weatherAndMetric; // TODO choose metric or not
+	Serial.println(weatherCall);
+	weathercurrenthttp.begin(weatherCall); //Specify the URL
+	int weatherHttpCode = weathercurrenthttp.GET();
+
+	String weather6DayCall = weather6Day + geolocate.lat + weatherAndLon + geolocate.lon + weatherAndMetric; // TODO choose metric or not
+	Serial.println(weather6DayCall);
+	weather6dayhttp.begin(weather6DayCall); //Specify the URL
+	int weather6DayHttpCode = weather6dayhttp.GET();
 
 	//box_x = 60;
 	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_BLACK);
@@ -293,10 +312,11 @@ void setup() {
 	StopWiFi(); // stop wifi and reduces power consumption
 
 	if (weatherHttpCode == 200)
-	{//StaticJsonBuffer<6000> jsonBuffer;	// we're told to use this, but it doesn't parse so we're using the deprecated dynamicjsonbuffer
-		StaticJsonDocument<6000> root;
-		Serial.println("bytes2:" + weatherhttp.getSize());
-		DeserializationError error = deserializeJson(root, weatherhttp.getString().c_str() );
+	{
+		String temp = weathercurrenthttp.getString(); // TODO remove to optimize
+		Serial.println("bytes2:"); 
+		Serial.println(temp.length());
+		DeserializationError error = deserializeJson(weatherCurrentDoc, temp.c_str());
 		
 		if (error) {
 			Serial.print(F("deserializeJson() failed22: "));
@@ -304,56 +324,37 @@ void setup() {
 			Sleep();
 		}
 
-		city = root["name"];
-		CurrentTemp = root["main"]["temp"];
-		long temp = root["dt"].as<long>();
-		//tm NTPstamp = 
-		// TODO move this math out
-		//time_t utcCalc = NTPstamp - 2208988800UL;
-		//Serial.println("m:"+NTPstamp.tm_mday);
-		//Serial.println("w:" + NTPstamp.tm_wday);
-		//Serial.println(minute(utcCalc));
-
-		//const char* datetime = root["query"]["results"]["channel"]["lastBuildDate"];
-		//CurrentDateTimeString = String(datetime);
-
-		//split on 4 and 6 space index to get time and AM or PM
-		//CurrentDateTime.substring(CurrentDateTime.indexOf
-		//Thu, 09 Aug 2018 11:34 PM PDT
-		//String CurrentTime = "00:00\0";
-		//String CurrentAMorPM = "XX\0";
-		//char *p = strtok(const_cast<char*>(datetime), " ");
-		//int countEm = 0;
-		//while (p) {
-		//	//printf("Token: %s\n", p);
-		//	if (countEm == 4)
-		//	{
-		//		CurrentTime = String(p);
-		//		Serial.print(CurrentTime);
-		//	}
-		//	else if (countEm == 5)
-		//	{
-		//		CurrentAMorPM = String(p);
-		//		Serial.println(CurrentAMorPM);
-		//	}
-		//	++countEm;
-		//	p = strtok(NULL, " ");
-		//}
-
-		//Serial.println(CurrentDateTime);
-
-		//ParseIntoWeatherObjects(root);
-		
-		
-		
-
-		weatherhttp.end();
+		city = weatherCurrentDoc["name"];
+		CurrentTemp = weatherCurrentDoc["main"]["temp"];
+		long temp2 = weatherCurrentDoc["dt"].as<long>(); // time?
+	
+		weathercurrenthttp.end(); // TODO remove bc waste of time?
 	}
 	else {
 		Serial.println("Error on Weather HTTP request");
 		//CurrentDateTime = "HTTP ERROR:" + weatherHttpCode;
 		Sleep();
 	}
+
+	if (weather6DayHttpCode == 200)
+	{
+		String temp = weather6dayhttp.getString(); // TODO remove to optimize
+		Serial.println("bytes3:");
+		Serial.println(temp.length());
+		DeserializationError error = deserializeJson(weather6Doc, temp.c_str());
+
+		if (error) {
+			Serial.print(F("deserializeJson() failed33: "));
+			Serial.println(error.c_str());
+			Sleep();
+		}
+	}
+	else {
+		Serial.println("Error on Weather 6 day request");
+		//CurrentDateTime = "HTTP ERROR:" + weatherHttpCode;
+		Sleep();
+	}
+
 
 	wifisection = millis() - wifisection;
 	displaysection = millis();
