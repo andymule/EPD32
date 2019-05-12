@@ -1,3 +1,4 @@
+#define NO_METRIC 1
 // TODO investigate multicore usage
 // TODO remove all String usages? use char* or char[]
 // TODO store lat lon after recieved once?
@@ -79,7 +80,6 @@ static RTC_DATA_ATTR struct timeval sleep_enter_time;	// TODO exploit this for s
 
 //const String weatherCurrent = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
 const String weatherCurrent = "https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&product=observation&oneobservation=true&latitude=";
-const String weatherCurren = "https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&product=observation&oneobservation=true&latitude=59.3307&longitude=18.0718";
 const String weatherAndLon = "&longitude=";
 const String weatherNoMetric = "&metric=false";	// todo is this autoresolved by here api?
 const String weatherLanguage = "&language=";	// https://developer.here.com/documentation/weather/topics/supported-languages.html
@@ -110,6 +110,10 @@ SavedSettings savedSettings;
 
 String CurrentTime; 
 int CurrentTemp;
+String TodaySky;
+String TodayTempDesc;
+int TodayHigh;
+int TodayLow;
 
 class WeatherDay
 {
@@ -268,6 +272,10 @@ void setup() {
 	}
 
 	String weatherCall = weatherCurrent + savedSettings.lat + weatherAndLon + savedSettings.lon;
+	if (NO_METRIC)
+	{
+		weatherCall = weatherCall + weatherNoMetric;
+	}
 	weathercurrenthttp.begin(weatherCall); //Specify the URL
 	int weatherHttpCode = weathercurrenthttp.GET();
 	Serial.println(weatherCall);
@@ -311,6 +319,11 @@ void setup() {
 			WeatherDays[i].PrecipText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["precipitationDesc"];
 		}
 
+		TodayHigh = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["highTemperature"];
+		TodayLow  = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["lowTemperature"];
+		TodaySky = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["skyDescription"].as<String>();
+		TodayTempDesc = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperatureDesc"].as<String>();
+
 		//ParseIntoWeatherObjects(&weatherCurrentDoc);
 		//CurrentTemp = weatherCurrentDoc["main"]["temp"];
 		//long temp2 = weatherCurrentDoc["dt"].as<long>(); // time?
@@ -329,37 +342,49 @@ void setup() {
 	Serial.println("Parsed weather");
 	// TODO andymule add other output when error 
 	if (weatherHttpCode == 200) {
+		const GFXfont* font12 = &FreeSans12pt7b;
+		int setback = 0;
 		//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+		// city in top left
 		gfx.setCursor(0, 0);
 		gfx.print(savedSettings.city);
 
+		// time in top right
 		gfx.setCursor(gfx.width()- gfx.width()/9 + 2, 0);
 		gfx.print(CurrentTime);
 
-		const GFXfont* font12 = &FreeSans12pt7b;
-		gfx.setFont(font12);
-		gfx.setCursor(gfx.width() / 2 - 16, 30);
+		//day of week
+		//gfx.setFont(font12);
+		//gfx.setCursor(gfx.width() / 2 - 16, 30);
 		//gfx.println(WeatherDays[0].DayOfWeek);
 
 		gfx.setFont(font12);
-		gfx.setCursor(8, 59);
-		gfx.print(" Low:");
+		setback = HalfWidthOfText(String(WeatherDays[0].Low), 12);
+		gfx.setCursor(gfx.width()/4-setback, 35);
+		//gfx.print(" Low:");
 		gfx.print(WeatherDays[0].Low);
-		//gfx.println(String("°"));	// TODO andymule draw degrees
-		gfx.setCursor(gfx.width() - 89, 59);
-		gfx.print("High:");
+		//gfx.println(String("°"));	// TODO andymule draw degrees // TODO turn centering boilerplate into method
+		setback = HalfWidthOfText(String(WeatherDays[0].High), 12);
+		gfx.setCursor(gfx.width()-gfx.width()/4-setback, 35);
+		//gfx.print("High:");
 		gfx.print(WeatherDays[0].High);
 		//gfx.println(String("°")); // TODO andymule draw degrees
 
 		gfx.setFont(font9);
-		gfx.setCursor(gfx.width() / 2 - 26, 79);
-		gfx.println(WeatherDays[0].SkyText);
 
-		gfx.setFont(font12);
-		gfx.setCursor(gfx.width() / 2 - 15, 30);
+		setback = HalfWidthOfText(TodayTempDesc, 9);
+		gfx.setCursor(gfx.width()/2 - setback, 53);
+		gfx.println(TodayTempDesc);
+
+		setback = HalfWidthOfText(TodaySky, 9);
+		gfx.setCursor(gfx.width()/2 - setback, 73);
+		gfx.println(TodaySky);
+
+		//gfx.setFont(font12);
+		//gfx.setCursor(gfx.width() / 2 - 15, 30);
 		//gfx.println(CurrentTemp);
 
-		addsun(gfx.width() / 2, 52, 7);	// TODO andymule use bitmap prolly
+		addsun(gfx.width()/2, 17, 7);	// TODO andymule use bitmap prolly
 
 		DrawDaysAhead(6);
 
@@ -404,9 +429,14 @@ void EnableWakeOnTilt()
 	//(uint32_t)esp_sleep_get_touchpad_wakeup_status();
 }
 
+int HalfWidthOfText(String text, int size)
+{
+	return text.length()*size / 2;
+}
+
 void DrawDaysAhead(int daysAhead)
 {
-	for (int i = 0; i <= daysAhead; i++)
+	for (int i = 0; i < daysAhead; i++)
 	{
 		DrawDayOfWeek(i, (gfx.width() / daysAhead), 90, 9);
 	}
@@ -415,7 +445,7 @@ void DrawDaysAhead(int daysAhead)
 void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeight)
 {
 	gfx.setFont();	// resets to default little font guy
-	gfx.setCursor(width*(daysAfterToday - 1), heightStart);
+	gfx.setCursor(width*(daysAfterToday), heightStart);
 	char c1 = WeatherDays[daysAfterToday].DayOfWeek[0];
 	char c2 = WeatherDays[daysAfterToday].DayOfWeek[1];
 	char c3 = WeatherDays[daysAfterToday].DayOfWeek[2];
@@ -424,20 +454,20 @@ void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeigh
 	//char* smallDay = "   "; //blank 3 chars
 	//strncpy(smallDay, WeatherDays[daysAfterToday].DayOfWeek, 3); // TODO why does strncpy crash esp?
 	gfx.println(s);
-	gfx.setCursor(width*(daysAfterToday - 1), heightStart + fontHeight);
+	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight);
 
 	String CheckText = String(WeatherDays[daysAfterToday].SkyText);
 	//String CheckText = String(WeatherDays[daysAfterToday].PrecipText);
-	String PrintText = String(CheckText);
+	String PrintText = String(CheckText);	// TODO smarter way to display just one word, need a real parser
 	if (CheckText.indexOf(" ") > 0)
 	{
 		PrintText = CheckText.substring(CheckText.lastIndexOf(" ") + 1, CheckText.length());
 	}
 	gfx.println(PrintText);
 
-	gfx.setCursor(width*(daysAfterToday - 1), heightStart + fontHeight * 2);
+	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight * 2);
 	gfx.println(WeatherDays[daysAfterToday].High);
-	gfx.setCursor(width*(daysAfterToday - 1), heightStart + fontHeight * 3);
+	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight * 3);
 	gfx.println(WeatherDays[daysAfterToday].Low);
 }
 
@@ -658,3 +688,46 @@ void addsun(int x, int y, int scale) {
 //	settingsFile.close();
 //	yield();
 //}
+
+/*
+https://developer.here.com/documentation/weather/topics/resource-type-weather-items.html
+skyInfo	String	Sky descriptor value.
+If the element is in the response and it contains a value, there is an Integer in the String. If the element is in the response and it does not contain a value, there is an asterisk (*) in the String.
+
+The available values are as follows:
+
+1 – Sunny
+2 – Clear
+3 – Mostly Sunny
+4 – Mostly Clear
+5 – Hazy Sunshine
+6 – Haze
+7 – Passing Clouds
+8 – More Sun than Clouds
+9 – Scattered Clouds
+10 – Partly Cloudy
+11 – A Mixture of Sun and Clouds
+12 – High Level Clouds
+13 – More Clouds than Sun
+14 – Partly Sunny
+15 – Broken Clouds
+16 – Mostly Cloudy
+17 – Cloudy
+18 – Overcast
+19 – Low Clouds
+20 – Light Fog
+21 – Fog
+22 – Dense Fog
+23 – Ice Fog
+24 – Sandstorm
+25 – Duststorm
+26 – Increasing Cloudiness
+27 – Decreasing Cloudiness
+28 – Clearing Skies
+29 – Breaks of Sun Later
+30 – Early Fog Followed by Sunny Skies
+31 – Afternoon Clouds
+32 – Morning Clouds
+33 – Smoke
+34 – Low Level Haze
+*/
