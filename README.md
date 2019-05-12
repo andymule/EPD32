@@ -13,4 +13,3 @@ https://github.com/zhouhan0126/WIFIMANAGER-ESP32
 https://github.com/suculent/esp32-http-update
 
 ArduinoJson
-(Install newest VERSION 4 from Arduino library manager, don't do verion 5+)
