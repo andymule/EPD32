@@ -1,4 +1,5 @@
 // TODO investigate multicore usage
+// TODO remove all String usages? use char* or char[]
 
 #define ARDUINOJSON_DECODE_UNICODE 1
 #include <ArduinoJson.h>
@@ -96,17 +97,20 @@ static RTC_DATA_ATTR struct timeval sleep_enter_time;
 // original string:
 // http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=59.3307&lon=18.0718&units=metric
 
-const String weatherCurrent = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
-const String weatherAndLon = "&lon=";
-const String weatherAndMetric = "&units=metric";
-const String weatherAndImperial = "&units=imperial";
-const String weather6Day = "http://api.openweathermap.org/data/2.5/forecast/daily?&appid=ba42e4a918f7e742d3143c5e8fff9210&cnt=7&lat=";
+//https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&latitude=59.3307&longitude=18.0718
+
+//59.3307&longitude = 18.0718
+
+//const String weatherCurrent = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
+const String weatherCurrent = "https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&latitude=";
+const String weatherAndLon = "&longitude=";
+//const String weatherAndMetric = "&units=metric";
+const String weatherNoMetic = "&metric=false";	// todo is this autoresolved by here api?
 
 const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8";
 //const String geolocatestring2 = "http://api.ipstack.com/check?access_key=ab925796fd105310f825bbdceece059e";
 
 HTTPClient weathercurrenthttp;
-HTTPClient weather6dayhttp;
 HTTPClient geolocatehttp;
 WiFiClient client; 
 
@@ -130,8 +134,6 @@ int CurrentTemp;
 
 class WeatherDay
 {
-	//float    Temperature;
-	//String   Icon;
 public:
 	int High;
 	int Low;
@@ -150,7 +152,7 @@ WeatherDay WeatherDays[10] = {};
 //const int width = 296;
 //const int height = 128;
 
-// TODO andymule ON RELEASE Disabling all logging but keeping the UART disable pin high only increased boot time by around 20 ms.
+// TODO andymule FOR RELEASE BUILD Disabling all logging and holding the UART disable pin high only increases boot time by around 20 ms?
 void setup() {
 	Serial.begin(128000);
 
@@ -244,16 +246,16 @@ void setup() {
 
 	gfx.setCursor(0, 0);
 	//gfx.fillRect(box_x, box_y, box_w, box_h, GxEPD_WHITE);	// cover it up though
-	wifisection = millis();
 	//xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
 	//vTaskDelete(StartWiFi);
 
-	geolocatehttp.begin(geolocatestring); //Specify the URL
+	DynamicJsonDocument weatherCurrentDoc(9000);
 	StaticJsonDocument<900> geoDoc;
-	StaticJsonDocument<900> weatherCurrentDoc;
-	StaticJsonDocument<900> weather6Doc;
 
+	geolocatehttp.begin(geolocatestring); //Specify the URL
+	
 
+	wifisection = millis();
 	StartWiFi();
 	//	gfx.drawBitmap(bwBitmap640x384_1, (GxEPD_WIDTH - 640) / 2, (GxEPD_HEIGHT - 384) / 2, 640, 384, GxEPD_BLACK);
 
@@ -272,7 +274,7 @@ void setup() {
 		String temp = geolocatehttp.getString(); // TODO remove to optimize
 		Serial.println("bytes1:");
 		Serial.println(temp.length());
-		DeserializationError error = deserializeJson(geoDoc, temp.c_str() );
+		DeserializationError error = deserializeJson(geoDoc, temp.c_str() );  //todo parse from stream
 		if (error) {
 			Serial.print(F("deserializeJson() failed 1 : "));
 			Serial.println(error.c_str());
@@ -294,15 +296,10 @@ void setup() {
 	geolocate.city.replace(" ", "%20");
 	geolocate.region_code.replace(" ", "%20");
 
-	String weatherCall = weatherCurrent + geolocate.lat + weatherAndLon + geolocate.lon + weatherAndMetric; // TODO choose metric or not
+	String weatherCall = weatherCurrent + geolocate.lat + weatherAndLon + geolocate.lon;
 	Serial.println(weatherCall);
 	weathercurrenthttp.begin(weatherCall); //Specify the URL
 	int weatherHttpCode = weathercurrenthttp.GET();
-
-	String weather6DayCall = weather6Day + geolocate.lat + weatherAndLon + geolocate.lon + weatherAndMetric; // TODO choose metric or not
-	Serial.println(weather6DayCall);
-	weather6dayhttp.begin(weather6DayCall); //Specify the URL
-	int weather6DayHttpCode = weather6dayhttp.GET();
 
 	//box_x = 60;
 	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_BLACK);
@@ -313,20 +310,20 @@ void setup() {
 
 	if (weatherHttpCode == 200)
 	{
+
 		String temp = weathercurrenthttp.getString(); // TODO remove to optimize
 		Serial.println("bytes2:"); 
 		Serial.println(temp.length());
-		DeserializationError error = deserializeJson(weatherCurrentDoc, temp.c_str());
+		DeserializationError error = deserializeJson(weatherCurrentDoc, temp.c_str()); //todo parse from stream
 		
 		if (error) {
 			Serial.print(F("deserializeJson() failed22: "));
 			Serial.println(error.c_str());
 			Sleep();
 		}
-
-		city = weatherCurrentDoc["name"];
-		CurrentTemp = weatherCurrentDoc["main"]["temp"];
-		long temp2 = weatherCurrentDoc["dt"].as<long>(); // time?
+		
+		//CurrentTemp = weatherCurrentDoc["main"]["temp"];
+		//long temp2 = weatherCurrentDoc["dt"].as<long>(); // time?
 	
 		weathercurrenthttp.end(); // TODO remove bc waste of time?
 	}
@@ -336,25 +333,7 @@ void setup() {
 		Sleep();
 	}
 
-	if (weather6DayHttpCode == 200)
-	{
-		String temp = weather6dayhttp.getString(); // TODO remove to optimize
-		Serial.println("bytes3:");
-		Serial.println(temp.length());
-		DeserializationError error = deserializeJson(weather6Doc, temp.c_str());
-
-		if (error) {
-			Serial.print(F("deserializeJson() failed33: "));
-			Serial.println(error.c_str());
-			Sleep();
-		}
-	}
-	else {
-		Serial.println("Error on Weather 6 day request");
-		//CurrentDateTime = "HTTP ERROR:" + weatherHttpCode;
-		Sleep();
-	}
-
+	city = geolocate.city.c_str();
 
 	wifisection = millis() - wifisection;
 	displaysection = millis();
