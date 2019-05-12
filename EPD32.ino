@@ -47,10 +47,10 @@ unsigned long lastConnectionTime = 0;          // Last time you connected to the
 const uint64_t OneSecond = 1000000LL;
 const uint64_t Time60 = 60LL;		/*60 min = 1 hour*/
 const uint64_t OneMinute = OneSecond * Time60;	/*6000000 uS = 1 minute*/
-const uint64_t OneHour   = OneMinute * Time60;	/*6000000 uS = 1 minute*/
+const uint64_t OneHour = OneMinute * Time60;	/*6000000 uS = 1 minute*/
 // TODO andymule this number weirdly lets me wake up every 12 hours or so ? This hasn't proven true and needs more work
 
-const uint64_t SleepTimeMicroseconds = OneHour*24LL;
+const uint64_t SleepTimeMicroseconds = OneHour * 24LL;
 
 /*
 NOTE:
@@ -108,7 +108,7 @@ SavedSettings savedSettings;
 //int CurrentTimeInMinutesIfMidnightWereZeroMinutes;
 //int Sunrise, Sunset;
 
-String CurrentTime; 
+String CurrentTime;
 int CurrentTemp;
 String TodaySky;
 String TodayTempDesc;
@@ -160,35 +160,35 @@ void setup() {
 	wakeup_reason = esp_sleep_get_wakeup_cause();
 	switch (wakeup_reason) {
 	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TIMER: {
-			Serial.print("Wake up from timer. Time spent in deep sleep: ");
-			Serial.print(sleep_time_ms);
-			Serial.println(" ms");
-			break;
-		}
+		Serial.print("Wake up from timer. Time spent in deep sleep: ");
+		Serial.print(sleep_time_ms);
+		Serial.println(" ms");
+		break;
+	}
 	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_GPIO:
-		{
-			Serial.println("Wakeup caused by GPIO"); break;
-		}
-		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_UART:
-		{
-			Serial.println("Wakeup caused by UART??"); break;
-		}
-		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TOUCHPAD:
-		{
-			prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
-			Serial.println("Wakeup caused by touchpad"); break;
-		}
-		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_ULP: Serial.println("Wakeup caused by ULP program"); break;
-		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_EXT0: Serial.println("Wakeup caused by EXT0"); break;
-		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_EXT1: Serial.println("Wakeup caused by EXT1"); break;
-		case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_UNDEFINED:
-		default: {
-			gfx.eraseDisplay(true);
-			gfx.eraseDisplay();
-			Serial.println("Wake from RESET or other");
-			prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
-			memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);
-		}
+	{
+		Serial.println("Wakeup caused by GPIO"); break;
+	}
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_UART:
+	{
+		Serial.println("Wakeup caused by UART??"); break;
+	}
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TOUCHPAD:
+	{
+		prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
+		Serial.println("Wakeup caused by touchpad"); break;
+	}
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_ULP: Serial.println("Wakeup caused by ULP program"); break;
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_EXT0: Serial.println("Wakeup caused by EXT0"); break;
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_EXT1: Serial.println("Wakeup caused by EXT1"); break;
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_UNDEFINED:
+	default: {
+		gfx.eraseDisplay(true);
+		gfx.eraseDisplay();
+		Serial.println("Wake from RESET or other");
+		prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
+		memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);
+	}
 	}
 	//gfx.drawBitmap(BitmapExample1, sizeof(BitmapExample1), gfx.bm_default);
 	//gfx.drawBitmap(gImage_Icon2, sizeof(gImage_Icon2), gfx.bm_default);
@@ -214,7 +214,7 @@ void setup() {
 	wifisection = millis();
 	StartWiFi();
 	lastConnectionTime = millis();
-	
+
 	savedSettings.valid = prefs.getBool("valid");
 	if (savedSettings.valid)
 	{
@@ -289,8 +289,8 @@ void setup() {
 	DynamicJsonDocument weatherCurrentDoc(12000);
 	if (weatherHttpCode == 200)
 	{
-		DeserializationError error = deserializeJson(weatherCurrentDoc, weathercurrenthttp.getString() ); //optimize doc size
-		
+		DeserializationError error = deserializeJson(weatherCurrentDoc, weathercurrenthttp.getString()); //optimize doc size
+
 		if (error) {
 			Serial.print(F("deserializeJson() failed22: "));
 			Serial.println(error.c_str());
@@ -303,9 +303,9 @@ void setup() {
 		CurrentTime = weatherCurrentDoc["feedCreation"].as<String>();
 		int startI = CurrentTime.indexOf('T');
 		int hourI = CurrentTime.indexOf(':');
-		int minuteI = hourI+3;
-		int hour = CurrentTime.substring(startI+1, hourI).toInt()+timezone; // TODO add timezone 4real -- use lib tho haha
-		String minutes = CurrentTime.substring(hourI+1, minuteI);
+		int minuteI = hourI + 3;
+		int hour = CurrentTime.substring(startI + 1, hourI).toInt() + timezone; // TODO add timezone 4real -- use lib tho haha
+		String minutes = CurrentTime.substring(hourI + 1, minuteI);
 		CurrentTime = String(hour) + ":" + minutes;
 		if (CurrentTime.length() < 5)
 			CurrentTime = " " + CurrentTime;	// prepend whitespace to keep time in the corner
@@ -320,7 +320,7 @@ void setup() {
 		}
 
 		TodayHigh = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["highTemperature"];
-		TodayLow  = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["lowTemperature"];
+		TodayLow = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["lowTemperature"];
 		TodaySky = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["skyDescription"].as<String>();
 		TodayTempDesc = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperatureDesc"].as<String>();
 
@@ -350,7 +350,7 @@ void setup() {
 		gfx.print(savedSettings.city);
 
 		// time in top right
-		gfx.setCursor(gfx.width()- gfx.width()/9 + 2, 0);
+		gfx.setCursor(gfx.width() - gfx.width() / 9 + 2, 0);
 		gfx.print(CurrentTime);
 
 		//day of week
@@ -360,12 +360,12 @@ void setup() {
 
 		gfx.setFont(font12);
 		setback = HalfWidthOfText(String(WeatherDays[0].Low), 12);
-		gfx.setCursor(gfx.width()/4-setback, 35);
+		gfx.setCursor(gfx.width() / 4 - setback, 35);
 		//gfx.print(" Low:");
 		gfx.print(WeatherDays[0].Low);
 		//gfx.println(String("°"));	// TODO andymule draw degrees // TODO turn centering boilerplate into method
 		setback = HalfWidthOfText(String(WeatherDays[0].High), 12);
-		gfx.setCursor(gfx.width()-gfx.width()/4-setback, 35);
+		gfx.setCursor(gfx.width() - gfx.width() / 4 - setback, 35);
 		//gfx.print("High:");
 		gfx.print(WeatherDays[0].High);
 		//gfx.println(String("°")); // TODO andymule draw degrees
@@ -373,18 +373,18 @@ void setup() {
 		gfx.setFont(font9);
 
 		setback = HalfWidthOfText(TodayTempDesc, 9);
-		gfx.setCursor(gfx.width()/2 - setback, 53);
+		gfx.setCursor(gfx.width() / 2 - setback, 53);
 		gfx.println(TodayTempDesc);
 
 		setback = HalfWidthOfText(TodaySky, 9);
-		gfx.setCursor(gfx.width()/2 - setback, 73);
+		gfx.setCursor(gfx.width() / 2 - setback, 73);
 		gfx.println(TodaySky);
 
 		//gfx.setFont(font12);
 		//gfx.setCursor(gfx.width() / 2 - 15, 30);
 		//gfx.println(CurrentTemp);
 
-		addsun(gfx.width()/2, 17, 7);	// TODO andymule use bitmap prolly
+		addsun(gfx.width() / 2, 17, 7);	// TODO andymule use bitmap prolly
 
 		DrawDaysAhead(6);
 
@@ -471,32 +471,7 @@ void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeigh
 	gfx.println(WeatherDays[daysAfterToday].Low);
 }
 
-//void ParseIntoWeatherObjects(DynamicJsonDocument* root)
-//{
-//	Serial.println( (*root).as<String>() );
-//
-//	for (int i = 0; i <= 7; i++)
-//	{
-//		WeatherDays[i].UTCTime		= (*root)["dailyForecasts"]["forecastLocation"]["forecast"][i]["utcTime"];
-//		WeatherDays[i].DayOfWeek	= (*root)["dailyForecasts"]["forecastLocation"]["forecast"][i]["weekday"];
-//		WeatherDays[i].High			= (*root)["dailyForecasts"]["forecastLocation"]["forecast"][i]["highTemperature"];
-//		WeatherDays[i].Low			= (*root)["dailyForecasts"]["forecastLocation"]["forecast"][i]["lowTemperature"];
-//		WeatherDays[i].Text			= (*root)["dailyForecasts"]["forecastLocation"]["forecast"][i]["skyDescription"];
-//		//WeatherDays[i].Text			= root["dailyForecasts"]["forecastLocation"]["forecast"][i]["precipitationDesc"];
-//
-//		Serial.println(String(i) + ":" +
-//			String(WeatherDays[i].UTCTime) + " " +
-//			String(WeatherDays[i].DayOfWeek) + " " +
-//			String(WeatherDays[i].High) + " " +
-//			String(WeatherDays[i].Low) + " " +
-//			String(WeatherDays[i].Text));
-//	}
-//}
-
 void loop() { // this will never run!
-	Serial.println("UH OH IN LOOP!");
-	delay(3000);
-	yield;
 	Sleep();
 }
 
@@ -538,16 +513,14 @@ void StartWiFi() {
 		}
 		connAttempts++;
 	}
-	Serial.println("WiFi connected at: " + String(WiFi.localIP()) + " ms" + (connAttempts*50));
+	Serial.println("WiFi connected at: " + String(WiFi.localIP()) + " ms" + (connAttempts * 50));
 }
-//#########################################################################################
+
 void StopWiFi() {
 	WiFi.disconnect(true);
 	WiFi.mode(WIFI_OFF);
-	//esp_wifi_stop(); // this is the old way 
-	//Serial.println("Wifi Off");
 }
-
+//#########################################################################################
 
 void addcloud(int x, int y, int scale, int linesize) {
 	//Draw cloud outer
@@ -636,58 +609,6 @@ void addsun(int x, int y, int scale) {
 	}
 }
 
-//void UpdateSettings()
-//{
-//	SPIFFS.begin();
-//	File settingsFile = SPIFFS.open(SETTINGS_FILE, "r+");//overwrite if found
-//	if (!settingsFile)
-//	{
-//		settingsFile = SPIFFS.open(SETTINGS_FILE, "w");	// make a new file if not found		
-//	}
-//	Serial.println("writing file..");
-//	unsigned char * data = reinterpret_cast<unsigned char*>(&savedSettings); // use unsigned char, as uint8_t is not guarunteed to be same width as char...
-//	size_t bytes = settingsFile.write(data, sizeof(SavedSettings));
-//	settingsFile.close();
-//	yield();
-//}
-//
-//void ReloadSavedSettings()
-//{
-//	SPIFFS.begin(true);
-//	//int ret = esp_spiffs_info(NULL, &total, &used);
-//
-//	File settingsFile = SPIFFS.open(SETTINGS_FILE, "r");
-//	yield;
-//	if (settingsFile && settingsFile.available())
-//	{
-//		if (settingsFile.size() == sizeof(SavedSettings))
-//		{
-//			uint8_t loadedSettings[sizeof(SavedSettings)];
-//			for (int i = 0; i < sizeof(SavedSettings); i++)
-//			{
-//				loadedSettings[i] = settingsFile.read();
-//			}
-//			SavedSettings *loadedSettingsPtr = (SavedSettings *)loadedSettings;
-//			SavedSettings *savedSettingsPtr = &savedSettings;
-//			memcpy(savedSettingsPtr, loadedSettingsPtr, sizeof(SavedSettings));
-//			Serial.println(savedSettings.lat);
-//			Serial.println(savedSettings.lon);
-//			Serial.println(savedSettings.city);
-//		}
-//		else // file exists but size is wrong, probably bc of firmware change. delete it.
-//		{
-//			Serial.println("OOP FORMAT");
-//			SPIFFS.format();
-//		}
-//	}
-//	else // file not found, oh well for now. We'll make one when we change settings
-//	{
-//		Serial.println("File not found! formatting...");
-//		SPIFFS.format();
-//	}
-//	settingsFile.close();
-//	yield();
-//}
 
 /*
 https://developer.here.com/documentation/weather/topics/resource-type-weather-items.html
@@ -695,39 +616,80 @@ skyInfo	String	Sky descriptor value.
 If the element is in the response and it contains a value, there is an Integer in the String. If the element is in the response and it does not contain a value, there is an asterisk (*) in the String.
 
 The available values are as follows:
-
-1 – Sunny
-2 – Clear
-3 – Mostly Sunny
-4 – Mostly Clear
-5 – Hazy Sunshine
-6 – Haze
-7 – Passing Clouds
-8 – More Sun than Clouds
-9 – Scattered Clouds
-10 – Partly Cloudy
-11 – A Mixture of Sun and Clouds
-12 – High Level Clouds
-13 – More Clouds than Sun
-14 – Partly Sunny
-15 – Broken Clouds
-16 – Mostly Cloudy
-17 – Cloudy
-18 – Overcast
-19 – Low Clouds
-20 – Light Fog
-21 – Fog
-22 – Dense Fog
-23 – Ice Fog
-24 – Sandstorm
-25 – Duststorm
-26 – Increasing Cloudiness
-27 – Decreasing Cloudiness
-28 – Clearing Skies
-29 – Breaks of Sun Later
-30 – Early Fog Followed by Sunny Skies
-31 – Afternoon Clouds
-32 – Morning Clouds
-33 – Smoke
-34 – Low Level Haze
 */
+
+String shortWeatherType(int skyInfo)
+{
+	switch (skyInfo)
+	{
+	case 1:		//1 – Sunny
+		return "sunny";
+	case 2:		//2 – Clear
+		return "clear";
+	case 3:		//3 – Mostly Sunny
+		return "sunny";
+	case 4:		//4 – Mostly Clear
+		return "clear";
+	case 5:		//5 – Hazy Sunshine
+		return "hazysun"; // todo make sure 7 can fit
+	case 6:		//6 – Haze
+		return "hazy";
+	case 7:		//7 – Passing Clouds
+		return "clouds";
+	case 8://8 – More Sun than Clouds
+		return "sunny";
+	case 9://9 – Scattered Clouds
+		return "cloudy";
+	case 10://10 – Partly Cloudy
+		return "cloudy";
+	case 11://11 – A Mixture of Sun and Clouds
+		return "cloudy";
+	case 12://12 – High Level Clouds
+		return "clouds";
+	case 13://13 – More Clouds than Sun
+		return "clouds";
+	case 14://14 – Partly Sunny
+		return "sunnish";
+	case 15://15 – Broken Clouds
+		return "cloudish";
+	case 16://16 – Mostly Cloudy
+		return "cloudy";
+	case 17://17 – Cloudy
+		return "cloudy";
+	case 18://18 – Overcast
+		return "overcast";
+	case 19://19 – Low Clouds
+		return "overcast";
+	case 20://20 – Light Fog
+		return "foggy";
+	case 21://21 – Fog
+		return "fog";
+	case 22://22 – Dense Fog
+		return "FOG";
+	case 23://23 – Ice Fog
+		return "icefog";
+	case 24://24 – Sandstorm
+		return "sandstorm";
+	case 25://25 – Duststorm
+		return "duststorm";
+	case 26://26 – Increasing Cloudiness
+		return "clouds";
+	case 27://27 – Decreasing Cloudiness
+		return "clouds";
+	case 28://28 – Clearing Skies
+		return "clear";
+	case 29://29 – Breaks of Sun Later
+		return "cloudy";
+	case 30://30 – Early Fog Followed by Sunny Skies
+		return "sun";
+	case 31://31 – Afternoon Clouds
+		return "clouds";
+	case 32://32 – Morning Clouds
+		return "clouds";
+	case 33://33 – Smoke
+		return "smoke";
+	case 34://34 – Low Level Haze
+		return "hazy";
+	}
+	return "";
+}
