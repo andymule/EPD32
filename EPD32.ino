@@ -4,8 +4,6 @@
 #define ARDUINOJSON_DECODE_UNICODE 1
 #include <ArduinoJson.h>
 #include <gfxfont.h>
-#include <Adafruit_SPITFT_Macros.h>
-#include <Adafruit_SPITFT.h>
 #include <Adafruit_GFX.h>
 #include <GxEPD.h>
 #include <GxGDEH029A1/GxGDEH029A1.cpp>	// our resolution is 128px x 296px, or 37888
@@ -22,15 +20,15 @@
 
 #include <pgmspace.h>
 #include <esp_wifi.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <DNSServer.h>
 #include <HTTPClient.h>
 
 #include "time.h"
 #include "esp32/ulp.h"
 
-#include <sstream>
 #include <string>
-#include <vector>
 
 //#include "Icon1.h"
 //#include "testimage.h"
@@ -91,8 +89,8 @@ T9 = GPIO32 */
 // RTC_DATA_ATTR marks variables to be saved across sleep
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
 
-//const String lonlon = "18.0718";
-//const String latlat = "59.3307";
+//const char* lonlon = "18.0718";
+//const char* latlat = "59.3307";
 
 // original string:
 // http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=59.3307&lon=18.0718&units=metric
@@ -104,11 +102,11 @@ static RTC_DATA_ATTR struct timeval sleep_enter_time;
 //const String weatherCurrent = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
 const String weatherCurrent = "https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&latitude=";
 const String weatherAndLon = "&longitude=";
-//const String weatherAndMetric = "&units=metric";
+//const char* weatherAndMetric = "&units=metric";
 const String weatherNoMetic = "&metric=false";	// todo is this autoresolved by here api?
 
 const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8";
-//const String geolocatestring2 = "http://api.ipstack.com/check?access_key=ab925796fd105310f825bbdceece059e";
+//const char* geolocatestring2 = "http://api.ipstack.com/check?access_key=ab925796fd105310f825bbdceece059e";
 
 HTTPClient weathercurrenthttp;
 HTTPClient geolocatehttp;
@@ -120,7 +118,8 @@ public:
 	String ip;
 	String city;
 	String region_code;
-	float lat, lon;
+	float lat;
+	float lon;
 	int geoname_id;	//www.geonames.org/5809844  TODO use GEOID for stuff?? Make own GeoID lookup service? jeez
 };
 Geolocate geolocate;
@@ -249,11 +248,7 @@ void setup() {
 	//xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
 	//vTaskDelete(StartWiFi);
 
-	DynamicJsonDocument weatherCurrentDoc(9000);
-	StaticJsonDocument<900> geoDoc;
-
 	geolocatehttp.begin(geolocatestring); //Specify the URL
-	
 
 	wifisection = millis();
 	StartWiFi();
@@ -267,14 +262,11 @@ void setup() {
 	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_BLACK);
 	//gfx.updateWindow(box_x, 0, 5, gfx.height(), true);
 	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_WHITE);
-	
+	Serial.println(geolocatestring);
 	if (geoHttpCode == 200)
 	{
-		//StaticJsonBuffer<6000> jsonBuffer;	// we're told to use this, but it doesn't parse so we're using the
-		String temp = geolocatehttp.getString(); // TODO remove to optimize
-		Serial.println("bytes1:");
-		Serial.println(temp.length());
-		DeserializationError error = deserializeJson(geoDoc, temp.c_str() );  //todo parse from stream
+		StaticJsonDocument<900> geoDoc;
+		DeserializationError error = deserializeJson(geoDoc, geolocatehttp.getString() );  //optimize doc size
 		if (error) {
 			Serial.print(F("deserializeJson() failed 1 : "));
 			Serial.println(error.c_str());
@@ -289,7 +281,7 @@ void setup() {
 		geolocatehttp.end();
 	}
 	else {
-		Serial.println("Error on Geolocate request");
+		Serial.println("Error on Geolocate request:" + geoHttpCode);
 		Sleep();
 	}
 
@@ -307,14 +299,10 @@ void setup() {
 	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_WHITE);
 
 	StopWiFi(); // stop wifi and reduces power consumption
-
+	DynamicJsonDocument weatherCurrentDoc(9000);
 	if (weatherHttpCode == 200)
 	{
-
-		String temp = weathercurrenthttp.getString(); // TODO remove to optimize
-		Serial.println("bytes2:"); 
-		Serial.println(temp.length());
-		DeserializationError error = deserializeJson(weatherCurrentDoc, temp.c_str()); //todo parse from stream
+		DeserializationError error = deserializeJson(weatherCurrentDoc, weathercurrenthttp.getStream() ); //optimize doc size
 		
 		if (error) {
 			Serial.print(F("deserializeJson() failed22: "));
@@ -328,8 +316,7 @@ void setup() {
 		weathercurrenthttp.end(); // TODO remove bc waste of time?
 	}
 	else {
-		Serial.println("Error on Weather HTTP request");
-		//CurrentDateTime = "HTTP ERROR:" + weatherHttpCode;
+		Serial.println("Error on Weather HTTP request:" + weatherHttpCode);
 		Sleep();
 	}
 
