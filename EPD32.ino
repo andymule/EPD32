@@ -3,6 +3,7 @@
 // TODO remove all String usages? use char* or char[]
 // TODO store lat lon after recieved once?
 // TODO profile WIFI vs data parse times
+// TODO detect time offset when awake and adjust to stay close to 24hrs (bc drifts in deepsleep)
 #include <SPI.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
@@ -135,18 +136,29 @@ WeatherDay WeatherDays[10] = {};
 
 //const int width = 296;
 //const int height = 128;
+#define SITE_TIMEOUT 5000 //ms timeout for site request
 Preferences prefs;
-
+const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
+const GFXfont* font12 = &FreeSans12pt7b;
+TaskHandle_t* WiFiTask;
+static bool WiFiStarted = false;
 
 // TODO andymule FOR RELEASE BUILD Disabling all logging and holding the UART disable pin high only increases boot time by around 20 ms?
 void setup() {
+	wifisection = millis();
+	bool runForever = true;
+	xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 2048, &runForever, 1, WiFiTask, 0); // start wifi on other core
+
 	struct timeval now;
 	gettimeofday(&now, NULL);
 	int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
-
 	Serial.begin(128000);
-	prefs.begin("settings");
+	Serial.print("Time spent in deep sleep : ");
+	Serial.print(sleep_time_ms);
+	Serial.println(" ms");
+
 	gfx.init();
+	prefs.begin("settings");
 
 	uint64_t wakeupBit = esp_sleep_get_ext1_wakeup_status();
 	if (wakeupBit & GPIO_SEL_33) {
@@ -160,9 +172,7 @@ void setup() {
 	wakeup_reason = esp_sleep_get_wakeup_cause();
 	switch (wakeup_reason) {
 	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TIMER: {
-		Serial.print("Wake up from timer. Time spent in deep sleep: ");
-		Serial.print(sleep_time_ms);
-		Serial.println(" ms");
+		Serial.println("Wake up from timer.");
 		break;
 	}
 	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_GPIO:
@@ -195,24 +205,18 @@ void setup() {
 	//gfx.drawPicture(Icon1, sizeof(Icon1));
 	//gfx.powerDown();
 	//gfx.powerUp();
+	
+	int setback = 0;
 	gfx.setRotation(3);
 	gfx.setTextColor(GxEPD_BLACK);
-	const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
 	gfx.setFont(font9);
-	gfx.setCursor(3, 30);
-	gfx.println("UPDATING");
-	gfx.updateWindow(0, 18, 120, 17, true);
-	gfx.fillRect(0, 15, 120, 17, GxEPD_WHITE);	// cover it up though
-	gfx.setFont();
-	Serial.println(":3");
+	setback = HalfWidthOfText("updating", 9);
+	gfx.setCursor(gfx.width()/2-setback, 20+9);
+	gfx.println("updating");
+	gfx.updateWindow(gfx.width()/2 - setback, 20, setback*2, 9, true);
+	gfx.fillRect(gfx.width()/2 - setback, 20-3, setback*2+3, 9*2, GxEPD_WHITE);	// cover it up though
 
-	gfx.setCursor(0, 0);
-	//gfx.fillRect(box_x, box_y, box_w, box_h, GxEPD_WHITE);	// cover it up though
-	//xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE); // multicore?
-	//vTaskDelete(StartWiFi);
-
-	wifisection = millis();
-	StartWiFi();
+	//StartWiFi(nullptr);
 	lastConnectionTime = millis();
 
 	savedSettings.valid = prefs.getBool("valid");
@@ -226,11 +230,12 @@ void setup() {
 	else
 	{
 		Serial.println("getting geolocation from internet");
+		geolocatehttp.setTimeout(SITE_TIMEOUT);		
+		EnsureWiFiIsStarted();
 		geolocatehttp.begin(geolocatestring); //Specify the URL
 		DynamicJsonDocument geoDoc(900);
 		int geoHttpCode = geolocatehttp.GET();
-
-		//box_x = 40;
+		
 		//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_BLACK);
 		//gfx.updateWindow(box_x, 0, 5, gfx.height(), true);
 		//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_WHITE);
@@ -265,20 +270,23 @@ void setup() {
 
 			geolocatehttp.end();
 		}
-		else {
-			Serial.println("Error on Geolocate request:" + geoHttpCode);
+		else { // FAILED TO CONNECT TO GEOLOCATE SITE
+			FailedToConnectToSite();
+			Serial.println("Error on Geolocate request");
 			Sleep();
 		}
 	}
-
 	String weatherCall = weatherCurrent + savedSettings.lat + weatherAndLon + savedSettings.lon;
 	if (NO_METRIC)
 	{
 		weatherCall = weatherCall + weatherNoMetric;
 	}
+	while (WiFiStarted == false)
+		delay(10);
+	weathercurrenthttp.setTimeout(SITE_TIMEOUT);
 	weathercurrenthttp.begin(weatherCall); //Specify the URL
 	int weatherHttpCode = weathercurrenthttp.GET();
-	Serial.println(weatherCall);
+	//Serial.println(weatherCall);
 	//box_x = 60;
 	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_BLACK);
 	//gfx.updateWindow(box_x, 0, 5, gfx.height(), true);
@@ -323,13 +331,10 @@ void setup() {
 		TodayLow = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["lowTemperature"];
 		TodaySky = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["skyDescription"].as<String>();
 		TodayTempDesc = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperatureDesc"].as<String>();
-
-		//ParseIntoWeatherObjects(&weatherCurrentDoc);
-		//CurrentTemp = weatherCurrentDoc["main"]["temp"];
-		//long temp2 = weatherCurrentDoc["dt"].as<long>(); // time?
-		//weathercurrenthttp.end(); // TODO remove bc waste of time?
+		CurrentTemp = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperature"];
 	}
 	else {
+		FailedToConnectToSite();
 		Serial.println("Error on Weather HTTP request:" + weatherHttpCode);
 		Sleep();
 	}
@@ -339,13 +344,13 @@ void setup() {
 
 	wifisection = millis() - wifisection;
 	displaysection = millis();
-	Serial.println("Parsed weather");
+	//Serial.println("Parsed weather");
 	// TODO andymule add other output when error 
 	if (weatherHttpCode == 200) {
-		const GFXfont* font12 = &FreeSans12pt7b;
-		int setback = 0;
 		//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
 		// city in top left
+		
+		gfx.setFont();	// uses tiny default font
 		gfx.setCursor(0, 0);
 		gfx.print(savedSettings.city);
 
@@ -363,15 +368,14 @@ void setup() {
 		gfx.setCursor(gfx.width() / 4 - setback, 35);
 		//gfx.print(" Low:");
 		gfx.print(WeatherDays[0].Low);
-		//gfx.println(String("°"));	// TODO andymule draw degrees // TODO turn centering boilerplate into method
+		//gfx.println("°");	// TODO andymule draw degrees // TODO turn centering boilerplate into method
 		setback = HalfWidthOfText(String(WeatherDays[0].High), 12);
 		gfx.setCursor(gfx.width() - gfx.width() / 4 - setback, 35);
 		//gfx.print("High:");
 		gfx.print(WeatherDays[0].High);
-		//gfx.println(String("°")); // TODO andymule draw degrees
+		//gfx.println(String("°"));	// TODO andymule draw degrees // TODO turn centering boilerplate into method
 
 		gfx.setFont(font9);
-
 		setback = HalfWidthOfText(TodayTempDesc, 9);
 		gfx.setCursor(gfx.width() / 2 - setback, 53);
 		gfx.println(TodayTempDesc);
@@ -380,11 +384,12 @@ void setup() {
 		gfx.setCursor(gfx.width() / 2 - setback, 73);
 		gfx.println(TodaySky);
 
-		//gfx.setFont(font12);
-		//gfx.setCursor(gfx.width() / 2 - 15, 30);
-		//gfx.println(CurrentTemp);
+		gfx.setFont(font9);
+		setback = HalfWidthOfText(String(CurrentTemp), 9);
+		gfx.setCursor(gfx.width() / 2 - setback, 20+9);
+		gfx.println(CurrentTemp);
 
-		addsun(gfx.width() / 2, 17, 7);	// TODO andymule use bitmap prolly
+		//addsun(gfx.width() / 2, 17, 7);	// TODO andymule use bitmap prolly
 
 		DrawDaysAhead(6);
 
@@ -399,23 +404,23 @@ void setup() {
 
 void Sleep()
 {
-	gfx.powerDown();	// saves power probably?? lololol
+	gfx.powerDown();	// saves power probably?? TODO check
+	EnableWakeOnTilt();	// actually allows wake on pin touch???
 	int result = esp_sleep_enable_timer_wakeup(SleepTimeMicroseconds);
-	if (result == ESP_ERR_INVALID_ARG)
+	/*if (result == ESP_ERR_INVALID_ARG)
 	{
-		Serial.print("FAILED to sleep:");
+		Serial.println("FAILED to sleep:");
 	}
 	else
 	{
-		Serial.print("SUCCESS SLEEPING:");
-	}
+		Serial.println("SUCCESS SLEEPING:");
+	}*/
 	gettimeofday(&sleep_enter_time, NULL);
-	EnableWakeOnTilt();	// actually allows wake on pin touch???
 	esp_deep_sleep_start(); // REALLY DEEP sleep and save power
 }
 
 void touchpadCallback() {
-	Serial.println("TOUCHPAD CALLBACK");
+	//Serial.println("TOUCHPAD CALLBACK");
 }
 
 void EnableWakeOnTilt()
@@ -471,6 +476,44 @@ void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeigh
 	gfx.println(WeatherDays[daysAfterToday].Low);
 }
 
+void FailedToConnectToSite()
+{
+	gfx.setFont(font9);
+	gfx.setCursor(0, 60 + 9);
+	gfx.println("Failed to connect to sites.");	
+	gfx.println("Check your internet connection.");
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	gfx.update();
+}
+
+void FailedToConnectToWiFi()
+{
+	//gfx.init();
+	//gfx.eraseDisplay(true);
+	//gfx.eraseDisplay();
+	gfx.setFont(font9);
+	gfx.setCursor(0, 60 + 9);
+	gfx.println("Failed to connect to WiFi.");
+	gfx.println("Check your router.");
+	gfx.update();
+}
+
+void EnsureWiFiIsStarted()
+{
+	bool deleteTask = false;
+	if (WiFiStarted == false)
+		deleteTask = true;
+	while (WiFiStarted == false)
+	{
+		Serial.print(".");
+		delay(10);
+	}
+	if (deleteTask) {
+		vTaskDelete(WiFiTask);
+		Serial.println;
+	}
+}
+
 void loop() { // this will never run!
 	Sleep();
 }
@@ -494,26 +537,21 @@ void loop() { // this will never run!
 //}
 ////#########################################################################################
 
-void StartWiFi() {
+void StartWiFi(void *loopForever) {
 	int connAttempts = 0;
-	Serial.print(F("\r\nConnecting to: "));
-	Serial.println(String(ssid));
-	//WiFi.disconnect();
 	WiFi.mode(WIFI_STA);
 	WiFi.begin(ssid, password);
-	//WiFi.waitForConnectResult();
-	//WiFi.setAutoReconnect(true);
 	while (WiFi.status() != WL_CONNECTED) {
-		delay(50); Serial.print(F("."));
+		delay(50); //Serial.print(F("."));
 		if (connAttempts > 200) {	// give it 10 seconds?
-			Serial.println("WiFi down? Failed to connect. RESTARTING DEVICE?");
-			// wifi prolly down, try again later
-			ESP.restart();	// TODO handle no wifi or can't connect better than this. prompt screen?
+			FailedToConnectToWiFi();
 			Sleep();
 		}
 		connAttempts++;
 	}
-	Serial.println("WiFi connected at: " + String(WiFi.localIP()) + " ms" + (connAttempts * 50));
+	WiFiStarted = true;
+	while (loopForever)
+		delay(1000);
 }
 
 void StopWiFi() {
