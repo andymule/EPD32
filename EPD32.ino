@@ -1,13 +1,8 @@
 #define NO_METRIC 1
-// TODO investigate multicore usage
-// TODO remove all String usages? use char* or char[]
-// TODO store lat lon after recieved once?
-// TODO profile WIFI vs data parse times
 // TODO detect time offset when awake and adjust to stay close to 24hrs (bc drifts in deepsleep)
 #include <SPI.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
-#include <DNSServer.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include "esp32/ulp.h"
@@ -25,9 +20,7 @@
 //#include <Fonts/FreeMonoBold9pt7b.h>
 //#include <Fonts/FreeMonoBold12pt7b.h>
 // make your own fonts here: http://oleddisplay.squix.ch/
-#include <string>
-
-#include "Icon2.h"
+//#include "Icon2.h"
 
 #if CONFIG_FREERTOS_UNICORE
 #define ARDUINO_RUNNING_CORE 0
@@ -131,7 +124,7 @@ WeatherDay WeatherDays[10] = {};
 
 // useful tools, like bitmap converter, fonts, and font converters
 // https://github.com/cesanta/arduino-drivers/tree/master/Adafruit-GFX-Library
-#include GxEPD_BitmapExamples
+//#include GxEPD_BitmapExamples
 // 
 
 //const int width = 296;
@@ -510,7 +503,7 @@ void EnsureWiFiIsStarted()
 	}
 	if (deleteTask) {
 		vTaskDelete(WiFiTask);
-		Serial.println;
+		Serial.println();
 	}
 }
 
