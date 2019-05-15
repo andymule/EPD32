@@ -1,5 +1,6 @@
 #define NO_METRIC 1
 // TODO detect time offset when awake and adjust to stay close to 24hrs (bc drifts in deepsleep)
+// TODO remove FREERTOS thing and try swapping cores, does it save time?
 #include <SPI.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
@@ -17,6 +18,9 @@
 /* include any other fonts you want to use https://github.com/adafruit/Adafruit-GFX-Library */
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
+#include <time.h>
+#include <sys/time.h>
+#include <TimeLib.h>
 //#include <Fonts/FreeMonoBold9pt7b.h>
 //#include <Fonts/FreeMonoBold12pt7b.h>
 // make your own fonts here: http://oleddisplay.squix.ch/
@@ -28,12 +32,12 @@
 #define ARDUINO_RUNNING_CORE 1
 #endif
 
-const char* ssid = "slow";
-const char* password = "bingbangbong";
-
 GxIO_Class io(SPI, /*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16);	// arbitrary selection of 17, 16
 GxEPD_Class gfx(io, /*RST=*/ 16, /*BUSY=*/ 4);				 // arbitrary selection of (16), 4
 
+HTTPClient weathercurrenthttp, geolocatehttp;
+TaskHandle_t* WiFiTask;
+static bool WiFiStarted = false;
 int wifisection, displaysection;
 unsigned long lastConnectionTime = 0;          // Last time you connected to the server, in milliseconds
 // 1000000LL is one second
@@ -41,10 +45,13 @@ unsigned long lastConnectionTime = 0;          // Last time you connected to the
 const uint64_t OneSecond = 1000000LL;
 const uint64_t Time60 = 60LL;		/*60 min = 1 hour*/
 const uint64_t OneMinute = OneSecond * Time60;	/*6000000 uS = 1 minute*/
-const uint64_t OneHour = OneMinute * Time60;	/*6000000 uS = 1 minute*/
+const uint64_t OneHour = OneMinute * Time60;
+const uint64_t OneDay = OneHour * 24;
 // TODO andymule this number weirdly lets me wake up every 12 hours or so ? This hasn't proven true and needs more work
 
-const uint64_t SleepTimeMicroseconds = OneHour * 24LL;
+//const uint64_t SleepTimeMicroseconds = OneHour * 24LL;
+bool SleepDriftWasTooFast = false;	// flag to handle math bc we're using uint64 and need to handle negatives
+uint64_t SleepDriftCompensation = 0;
 
 /*
 NOTE:
@@ -66,7 +73,7 @@ Touch Sensor Pin Layout
 T0 = GPIO4, T1 = GPIO0, T2 = GPIO2, T3 = GPIO15, T4 = GPIO13, T5 = GPIO12, T6 = GPIO14, T7 = GPIO27, T8 = GPIO33, T9 = GPIO32 */
 
 // RTC_DATA_ATTR marks variables to be saved across sleep
-static RTC_DATA_ATTR struct timeval sleep_enter_time;	// TODO exploit this for saving preferences??
+//static RTC_DATA_ATTR struct timeval sleep_enter_time;	// TODO exploit this for saving preferences??
 
 // original strings:
 // http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=59.3307&lon=18.0718&units=metric
@@ -80,34 +87,19 @@ const String weatherLanguage = "&language=";	// https://developer.here.com/docum
 
 const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8"; //key=ab925796fd105310f825bbdceece059e
 
-HTTPClient weathercurrenthttp, geolocatehttp;
-//WiFiClient client; 
+const char* ssid = "slow";
+const char* password = "bingbangbong";
 
 class SavedSettings
 {
 public:
 	bool valid;
-	//String ip;	// monitor and check for change? 
 	String city;
-	//String region_code;
 	float lat;
 	float lon;
-	//int geoname_id;	//www.geonames.org/5809844  TODO use GEOID for stuff?? Make own GeoID lookup service? jeez
 };
-SavedSettings savedSettings;
-
-//String city;
-//String CurrentDateTimeString;
-//String CurrentDayOfWeek;
-//int CurrentTimeInMinutesIfMidnightWereZeroMinutes;
-//int Sunrise, Sunset;
-
-String CurrentTime;
-int CurrentTemp;
-String TodaySky;
-String TodayTempDesc;
-int TodayHigh;
-int TodayLow;
+Preferences prefs;	// used to save and load from memory
+SavedSettings savedSettings; // loads from memory into RAM, used for refernce afterward
 
 class WeatherDay
 {
@@ -116,25 +108,29 @@ public:
 	int Low;
 	const char* SkyText;
 	const char* PrecipText;
-	const char* UTCTime;
+	//const char* UTCTime;
 	const char* DayOfWeek;
 };
-
 WeatherDay WeatherDays[10] = {};
+
+String CurrentTime;
+int CurrentTemp;
+String TodaySky;
+String TodayTempDesc;
+int TodayHigh;
+int TodayLow;
 
 // useful tools, like bitmap converter, fonts, and font converters
 // https://github.com/cesanta/arduino-drivers/tree/master/Adafruit-GFX-Library
 //#include GxEPD_BitmapExamples
-// 
 
 //const int width = 296;
 //const int height = 128;
-#define SITE_TIMEOUT 5000 //ms timeout for site request
-Preferences prefs;
+#define SITE_TIMEOUT_MS 5000 // timeout for site request
+#define WIFI_DELAY_CHECK_TIME_MS 50
+#define WIFI_TIMEOUT_MS 10000 // 10 sec to connect to wifi?
 const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
 const GFXfont* font12 = &FreeSans12pt7b;
-TaskHandle_t* WiFiTask;
-static bool WiFiStarted = false;
 
 // TODO andymule FOR RELEASE BUILD Disabling all logging and holding the UART disable pin high only increases boot time by around 20 ms?
 void setup() {
@@ -142,15 +138,16 @@ void setup() {
 	bool runForever = true;
 	xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 2048, &runForever, 1, WiFiTask, 0); // start wifi on other core
 
-	struct timeval now;
-	gettimeofday(&now, NULL);
-	int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
+	//struct timeval wakeTime;
+	//gettimeofday(&wakeTime, NULL);
+	//int sleep_time_ms = (wakeTime.tv_sec - sleep_enter_time.tv_sec) * 1000 + (wakeTime.tv_usec - sleep_enter_time.tv_usec) / 1000;
 	Serial.begin(128000);
-	Serial.print("Time spent in deep sleep : ");
-	Serial.print(sleep_time_ms);
-	Serial.println(" ms");
+	//Serial.print("Time spent in deep sleep : ");
+	//Serial.print(sleep_time_ms);
+	//Serial.println(" ms");
 
 	gfx.init();
+	gfx.setRotation(3);
 	prefs.begin("settings");
 
 	uint64_t wakeupBit = esp_sleep_get_ext1_wakeup_status();
@@ -193,21 +190,8 @@ void setup() {
 		memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);
 	}
 	}
-	//gfx.drawBitmap(BitmapExample1, sizeof(BitmapExample1), gfx.bm_default);
-	//gfx.drawBitmap(gImage_Icon2, sizeof(gImage_Icon2), gfx.bm_default);
-	//gfx.drawPicture(Icon1, sizeof(Icon1));
-	//gfx.powerDown();
-	//gfx.powerUp();
-	
-	int setback = 0;
-	gfx.setRotation(3);
-	gfx.setTextColor(GxEPD_BLACK);
-	gfx.setFont(font9);
-	setback = HalfWidthOfText("updating", 9);
-	gfx.setCursor(gfx.width()/2-setback, 20+9);
-	gfx.println("updating");
-	gfx.updateWindow(gfx.width()/2 - setback, 20, setback*2, 9, true);
-	gfx.fillRect(gfx.width()/2 - setback, 20-3, setback*2+3, 9*2, GxEPD_WHITE);	// cover it up though
+
+	DrawUpdating();
 
 	//StartWiFi(nullptr);
 	lastConnectionTime = millis();
@@ -215,57 +199,24 @@ void setup() {
 	savedSettings.valid = prefs.getBool("valid");
 	if (savedSettings.valid)
 	{
-		Serial.println("loaded saved lat and lon");
-		savedSettings.lat = prefs.getFloat("lat");
-		savedSettings.lon = prefs.getFloat("lon");
-		savedSettings.city = prefs.getString("city");
+		ReloadSavedSettings();
 	}
 	else
 	{
 		Serial.println("getting geolocation from internet");
-		geolocatehttp.setTimeout(SITE_TIMEOUT);		
+		geolocatehttp.setTimeout(SITE_TIMEOUT_MS);
 		EnsureWiFiIsStarted();
-		geolocatehttp.begin(geolocatestring); //Specify the URL
-		DynamicJsonDocument geoDoc(900);
+		geolocatehttp.begin(geolocatestring);
 		int geoHttpCode = geolocatehttp.GET();
-		
-		//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_BLACK);
-		//gfx.updateWindow(box_x, 0, 5, gfx.height(), true);
-		//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_WHITE);
-		//Serial.println(geolocatestring);
+
 		if (geoHttpCode == 200)
 		{
-			// Enough space for:
-			// + 1 object with 3 members
-			// + 2 objects with 1 member
-			//const int capacity = JSON_OBJECT_SIZE(3) + 2 * JSON_OBJECT_SIZE(1);
-			//StaticJsonDocument<capacity> doc;
-			// TODO look into this for making exactly sized JSON docs
-			//"Of course, if the JsonDocument were bigger, it would make sense to move it the heap" (<- from PDF)
-
-			DeserializationError error = deserializeJson(geoDoc, geolocatehttp.getString());  //optimize doc size
-			if (error) {
-				Serial.print(F("deserializeJson() failed 1 : "));
-				Serial.println(error.c_str());
-				Sleep();
-			}
-
-			String city = geoDoc["city"].as<String>();
-			city.replace(" ", "%20");
-			savedSettings.lat = geoDoc["latitude"];
-			savedSettings.lon = geoDoc["longitude"];
-			savedSettings.city = const_cast<char*>(city.c_str());
-
-			prefs.putBool("valid", true);
-			prefs.putFloat("lat", savedSettings.lat);
-			prefs.putFloat("lon", savedSettings.lon);
-			prefs.putString("city", city);
-
-			geolocatehttp.end();
+			ParseGeoLocation();
+			//geolocatehttp.end(); 
+			// we dont end the geolocatehttp to save time TODO does this actually save time?
 		}
 		else { // FAILED TO CONNECT TO GEOLOCATE SITE
-			FailedToConnectToSite();
-			Serial.println("Error on Geolocate request");
+			FailedToConnectToSite();	// draws to epaper
 			Sleep();
 		}
 	}
@@ -274,57 +225,17 @@ void setup() {
 	{
 		weatherCall = weatherCall + weatherNoMetric;
 	}
-	while (WiFiStarted == false)
-		delay(10);
-	weathercurrenthttp.setTimeout(SITE_TIMEOUT);
+	weathercurrenthttp.setTimeout(SITE_TIMEOUT_MS);
+	EnsureWiFiIsStarted();
 	weathercurrenthttp.begin(weatherCall); //Specify the URL
 	int weatherHttpCode = weathercurrenthttp.GET();
-	//Serial.println(weatherCall);
-	//box_x = 60;
-	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_BLACK);
-	//gfx.updateWindow(box_x, 0, 5, gfx.height(), true);
-	//gfx.fillRect(box_x, 0, 5, gfx.height(), GxEPD_WHITE);
 
 	StopWiFi(); // stop wifi and reduces power consumption
 
-	DynamicJsonDocument weatherCurrentDoc(12000);
 	if (weatherHttpCode == 200)
 	{
-		DeserializationError error = deserializeJson(weatherCurrentDoc, weathercurrenthttp.getString()); //optimize doc size
-
-		if (error) {
-			Serial.print(F("deserializeJson() failed22: "));
-			Serial.println(error.c_str());
-			Sleep();
-		}
-		String ObservationTime = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["utcTime"].as<String>();
-		int timezonestartI = ObservationTime.lastIndexOf('+');
-		int timezoneendI = ObservationTime.lastIndexOf(':');
-		int timezone = ObservationTime.substring(timezonestartI + 1, timezoneendI).toInt();
-		CurrentTime = weatherCurrentDoc["feedCreation"].as<String>();
-		int startI = CurrentTime.indexOf('T');
-		int hourI = CurrentTime.indexOf(':');
-		int minuteI = hourI + 3;
-		int hour = CurrentTime.substring(startI + 1, hourI).toInt() + timezone; // TODO add timezone 4real -- use lib tho haha
-		String minutes = CurrentTime.substring(hourI + 1, minuteI);
-		CurrentTime = String(hour) + ":" + minutes;
-		if (CurrentTime.length() < 5)
-			CurrentTime = " " + CurrentTime;	// prepend whitespace to keep time in the corner
-		for (int i = 0; i <= 7; i++)
-		{
-			WeatherDays[i].UTCTime = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["utcTime"];
-			WeatherDays[i].DayOfWeek = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["weekday"].as<char*>();
-			WeatherDays[i].High = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["highTemperature"];
-			WeatherDays[i].Low = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["lowTemperature"];
-			WeatherDays[i].SkyText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["skyDescription"];
-			WeatherDays[i].PrecipText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["precipitationDesc"];
-		}
-
-		TodayHigh = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["highTemperature"];
-		TodayLow = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["lowTemperature"];
-		TodaySky = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["skyDescription"].as<String>();
-		TodayTempDesc = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperatureDesc"].as<String>();
-		CurrentTemp = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperature"];
+		ParseWeatherAndTime();
+		// we dont end the weathercurrenthttp to save time TODO does this actually save time?
 	}
 	else {
 		FailedToConnectToSite();
@@ -332,62 +243,10 @@ void setup() {
 		Sleep();
 	}
 
-	//geolocate.region_code.replace(" ", "%20");
-	//city = savedSettings.city;
-
 	wifisection = millis() - wifisection;
 	displaysection = millis();
-	//Serial.println("Parsed weather");
-	// TODO andymule add other output when error 
 	if (weatherHttpCode == 200) {
-		//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-		// city in top left
-		
-		gfx.setFont();	// uses tiny default font
-		gfx.setCursor(0, 0);
-		gfx.print(savedSettings.city);
-
-		// time in top right
-		gfx.setCursor(gfx.width() - gfx.width() / 9 + 2, 0);
-		gfx.print(CurrentTime);
-
-		//day of week
-		//gfx.setFont(font12);
-		//gfx.setCursor(gfx.width() / 2 - 16, 30);
-		//gfx.println(WeatherDays[0].DayOfWeek);
-
-		gfx.setFont(font12);
-		setback = HalfWidthOfText(String(WeatherDays[0].Low), 12);
-		gfx.setCursor(gfx.width() / 4 - setback, 35);
-		//gfx.print(" Low:");
-		gfx.print(WeatherDays[0].Low);
-		//gfx.println("°");	// TODO andymule draw degrees // TODO turn centering boilerplate into method
-		setback = HalfWidthOfText(String(WeatherDays[0].High), 12);
-		gfx.setCursor(gfx.width() - gfx.width() / 4 - setback, 35);
-		//gfx.print("High:");
-		gfx.print(WeatherDays[0].High);
-		//gfx.println(String("°"));	// TODO andymule draw degrees // TODO turn centering boilerplate into method
-
-		gfx.setFont(font9);
-		setback = HalfWidthOfText(TodayTempDesc, 9);
-		gfx.setCursor(gfx.width() / 2 - setback, 53);
-		gfx.println(TodayTempDesc);
-
-		setback = HalfWidthOfText(TodaySky, 9);
-		gfx.setCursor(gfx.width() / 2 - setback, 73);
-		gfx.println(TodaySky);
-
-		gfx.setFont(font9);
-		setback = HalfWidthOfText(String(CurrentTemp), 9);
-		gfx.setCursor(gfx.width() / 2 - setback, 20+9);
-		gfx.println(CurrentTemp);
-
-		//addsun(gfx.width() / 2, 17, 7);	// TODO andymule use bitmap prolly
-
-		DrawDaysAhead(6);
-
-		//gfx.update();
-		gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+		DrawDisplay();
 	}
 	displaysection = millis() - displaysection;
 	Serial.println("Wifi took:	 " + String(wifisection / 1000.0) + " secs");
@@ -395,21 +254,20 @@ void setup() {
 	Sleep();
 }
 
+// ############################# END MAIN CODE ###################################################
+
 void Sleep()
 {
 	gfx.powerDown();	// saves power probably?? TODO check
 	EnableWakeOnTilt();	// actually allows wake on pin touch???
-	int result = esp_sleep_enable_timer_wakeup(SleepTimeMicroseconds);
-	/*if (result == ESP_ERR_INVALID_ARG)
-	{
-		Serial.println("FAILED to sleep:");
-	}
+	uint64_t sleepTime = 0;
+	if (SleepDriftWasTooFast)
+		sleepTime = OneDay + SleepDriftCompensation; // woke up early from being too fast, so sleep longer next time
 	else
-	{
-		Serial.println("SUCCESS SLEEPING:");
-	}*/
-	gettimeofday(&sleep_enter_time, NULL);
-	esp_deep_sleep_start(); // REALLY DEEP sleep and save power
+		sleepTime = OneDay - SleepDriftCompensation;
+	int result = esp_sleep_enable_timer_wakeup(sleepTime);
+	//gettimeofday(&sleep_enter_time, NULL);
+	esp_deep_sleep_start();
 }
 
 void touchpadCallback() {
@@ -471,9 +329,10 @@ void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeigh
 
 void FailedToConnectToSite()
 {
+	Serial.println("Error on Geolocate request");
 	gfx.setFont(font9);
 	gfx.setCursor(0, 60 + 9);
-	gfx.println("Failed to connect to sites.");	
+	gfx.println("Failed to connect to sites.");
 	gfx.println("Check your internet connection.");
 	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
 	gfx.update();
@@ -494,10 +353,9 @@ void FailedToConnectToWiFi()
 void EnsureWiFiIsStarted()
 {
 	bool deleteTask = false;
-	if (WiFiStarted == false)
-		deleteTask = true;
 	while (WiFiStarted == false)
 	{
+		deleteTask = true;
 		Serial.print(".");
 		delay(10);
 	}
@@ -535,8 +393,8 @@ void StartWiFi(void *loopForever) {
 	WiFi.mode(WIFI_STA);
 	WiFi.begin(ssid, password);
 	while (WiFi.status() != WL_CONNECTED) {
-		delay(50); //Serial.print(F("."));
-		if (connAttempts > 200) {	// give it 10 seconds?
+		delay(WIFI_DELAY_CHECK_TIME_MS); //Serial.print(F("."));
+		if (connAttempts > WIFI_TIMEOUT_MS / WIFI_DELAY_CHECK_TIME_MS) {
 			FailedToConnectToWiFi();
 			Sleep();
 		}
@@ -551,7 +409,184 @@ void StopWiFi() {
 	WiFi.disconnect(true);
 	WiFi.mode(WIFI_OFF);
 }
+
 //#########################################################################################
+
+void ParseWeatherAndTime()
+{
+	DynamicJsonDocument weatherCurrentDoc(12000);
+	DeserializationError error = deserializeJson(weatherCurrentDoc, weathercurrenthttp.getString()); //optimize doc size
+
+	if (error) {
+		Serial.print(F("deserializeJson() failed22: "));
+		Serial.println(error.c_str());
+		Sleep();
+	}
+	String ObservationTime = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["utcTime"].as<String>();
+	int timezonestartI = ObservationTime.lastIndexOf('+');
+	int timezoneendI = ObservationTime.lastIndexOf(':');
+	int timezone = ObservationTime.substring(timezonestartI + 1, timezoneendI).toInt();
+	CurrentTime = weatherCurrentDoc["feedCreation"].as<String>();
+	SetClockAndDriftCompensate();
+	ParseCurrentTimeForDisplay(timezone);
+
+	for (int i = 0; i <= 7; i++)
+	{
+		//WeatherDays[i].UTCTime = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["utcTime"];
+		WeatherDays[i].DayOfWeek = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["weekday"].as<char*>();
+		WeatherDays[i].High = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["highTemperature"];
+		WeatherDays[i].Low = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["lowTemperature"];
+		WeatherDays[i].SkyText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["skyDescription"];
+		WeatherDays[i].PrecipText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["precipitationDesc"];
+	}
+
+	TodayHigh = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["highTemperature"];
+	TodayLow = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["lowTemperature"];
+	TodaySky = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["skyDescription"].as<String>();
+	TodayTempDesc = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperatureDesc"].as<String>();
+	CurrentTemp = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperature"];
+}
+
+void SetClockAndDriftCompensate()
+{	// CurrentTime should be freshly parsed from JSON at this point
+	// 0YYY-5M-8DThh:mm:ssfZ
+	int YYYY = CurrentTime.substring(0, 4).toInt();
+	int MM = CurrentTime.substring(5, 2).toInt();
+	int DD = CurrentTime.substring(8, 2).toInt();
+	int hh = CurrentTime.substring(11, 2).toInt();
+	int mm = CurrentTime.substring(14, 2).toInt();
+	int ss = CurrentTime.substring(17, 2).toInt();
+	tmElements_t tm;
+	tm.Year = CalendarYrToTm(YYYY);
+	tm.Month = MM;
+	tm.Day = DD;
+	tm.Hour = hh;
+	tm.Minute = mm;
+	tm.Second = ss;
+	time_t oldTime = now();
+	time_t newTime = makeTime(tm);
+	setTime(newTime);
+	int64_t timeDriftSeconds = newTime - oldTime; // negative if i woke up early, bc oldtime was too fast
+	SleepDriftWasTooFast = (timeDriftSeconds < 0);
+	if (SleepDriftWasTooFast)
+		timeDriftSeconds *= -1;
+	SleepDriftCompensation = (uint64_t)timeDriftSeconds * OneSecond;
+}
+
+void ParseCurrentTimeForDisplay(int timezone)
+{
+	int startI = CurrentTime.indexOf('T');
+	int hourI = CurrentTime.indexOf(':');
+	int minuteI = hourI + 3;
+	int hour = CurrentTime.substring(startI + 1, hourI).toInt() + timezone; // TODO add timezone 4real -- use lib tho haha
+	String minutes = CurrentTime.substring(hourI + 1, minuteI);
+	CurrentTime = String(hour) + ":" + minutes;
+	if (CurrentTime.length() < 5)
+		CurrentTime = " " + CurrentTime;	// prepend whitespace to keep time in the corner
+}
+
+void ParseGeoLocation()
+{
+	// Enough space for:
+			// + 1 object with 3 members
+			// + 2 objects with 1 member
+			//const int capacity = JSON_OBJECT_SIZE(3) + 2 * JSON_OBJECT_SIZE(1);
+			//StaticJsonDocument<capacity> doc;
+			// TODO look into this for making exactly sized JSON docs
+			//"Of course, if the JsonDocument were bigger, it would make sense to move it the heap" (<- from PDF)
+	DynamicJsonDocument geoDoc(900);
+	DeserializationError error = deserializeJson(geoDoc, geolocatehttp.getString());  //optimize doc size
+	if (error) {
+		Serial.print(F("deserializeJson() failed 1 : "));
+		Serial.println(error.c_str());
+		Sleep();
+	}
+
+	String city = geoDoc["city"].as<String>();
+	city.replace(" ", "%20");
+	savedSettings.lat = geoDoc["latitude"];
+	savedSettings.lon = geoDoc["longitude"];
+	savedSettings.city = const_cast<char*>(city.c_str());
+
+	prefs.putBool("valid", true);
+	prefs.putFloat("lat", savedSettings.lat);
+	prefs.putFloat("lon", savedSettings.lon);
+	prefs.putString("city", city);
+}
+
+// ########################################################################################
+
+void ReloadSavedSettings()
+{
+	Serial.println("loaded saved lat and lon");
+	savedSettings.lat = prefs.getFloat("lat");
+	savedSettings.lon = prefs.getFloat("lon");
+	savedSettings.city = prefs.getString("city");
+}
+
+// ########################################################################################
+void DrawDisplay()
+{
+	int setback = 0;
+	// city in top left
+	gfx.setFont();	// uses tiny default font
+	gfx.setCursor(0, 0);
+	gfx.print(savedSettings.city);
+
+	// time in top right
+	gfx.setCursor(gfx.width() - gfx.width() / 9 + 2, 0);
+	gfx.print(CurrentTime);
+
+	//day of week
+	//gfx.setFont(font12);
+	//gfx.setCursor(gfx.width() / 2 - 16, 30);
+	//gfx.println(WeatherDays[0].DayOfWeek);
+
+	gfx.setFont(font12);
+	setback = HalfWidthOfText(String(WeatherDays[0].Low), 12);
+	gfx.setCursor(gfx.width() / 4 - setback, 35);
+	//gfx.print(" Low:");
+	gfx.print(WeatherDays[0].Low);
+	//gfx.println("°");	// TODO andymule draw degrees // TODO turn centering boilerplate into method
+	setback = HalfWidthOfText(String(WeatherDays[0].High), 12);
+	gfx.setCursor(gfx.width() - gfx.width() / 4 - setback, 35);
+	//gfx.print("High:");
+	gfx.print(WeatherDays[0].High);
+	//gfx.println(String("°"));	// TODO andymule draw degrees // TODO turn centering boilerplate into method
+
+	gfx.setFont(font9);
+	setback = HalfWidthOfText(TodayTempDesc, 9);
+	gfx.setCursor(gfx.width() / 2 - setback, 53);
+	gfx.println(TodayTempDesc);
+
+	setback = HalfWidthOfText(TodaySky, 9);
+	gfx.setCursor(gfx.width() / 2 - setback, 73);
+	gfx.println(TodaySky);
+
+	gfx.setFont(font9);
+	setback = HalfWidthOfText(String(CurrentTemp), 9);
+	gfx.setCursor(gfx.width() / 2 - setback, 20 + 9);
+	gfx.println(CurrentTemp);
+
+	//addsun(gfx.width() / 2, 17, 7);	// TODO andymule use bitmap prolly
+
+	DrawDaysAhead(6);
+
+	//gfx.update();
+	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+}
+
+void DrawUpdating()
+{
+	int setback = 0;
+	gfx.setTextColor(GxEPD_BLACK);
+	gfx.setFont(font9);
+	setback = HalfWidthOfText("updating", 9);
+	gfx.setCursor(gfx.width() / 2 - setback, 20 + 9);
+	gfx.println("updating");
+	gfx.updateWindow(gfx.width() / 2 - setback, 20, setback * 2, 9, true);
+	gfx.fillRect(gfx.width() / 2 - setback, 20 - 3, setback * 2 + 3, 9 * 2, GxEPD_WHITE);	// cover it up though
+}
 
 void addcloud(int x, int y, int scale, int linesize) {
 	//Draw cloud outer
