@@ -105,7 +105,7 @@ const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b5
 const char* ssid = "slow";
 const char* password = "bingbangbong";
 
-const char* selfhostedWifiName = "atmo";
+const char* selfhostedWifiName = "ATMO";
 String header;
 
 class SavedSettings
@@ -228,6 +228,7 @@ void setup() {
 
 	if (HostSetupSite)
 	{
+		DrawConnectionInstructions();
 		HostWebsiteForInit();
 		return;
 	}
@@ -455,7 +456,7 @@ void ParseWeatherAndTime()
 	CurrentTemp = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperature"];
 }
 
-void SetClockAndDriftCompensate()
+void SetClockAndDriftCompensate() // TODO put on second core?
 {	// CurrentTime should be freshly parsed from JSON at this point
 	// 0YYY-5M-8DThh:mm:ssfZ
 	int YYYY = CurrentTime.substring(0, 4).toInt();
@@ -538,6 +539,7 @@ void ReloadSavedSettings()
 void DrawDisplay()
 {
 	int setback = 0;
+	gfx.setTextColor(GxEPD_BLACK);
 	// city in top left
 	gfx.setFont();	// uses tiny default font
 	gfx.setCursor(0, 0);
@@ -582,7 +584,8 @@ void DrawDisplay()
 
 	DrawDaysAhead(6);
 
-	gfx.update();
+	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	//gfx.update();
 	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, true);
 }
 
@@ -603,6 +606,7 @@ void DrawDaysAhead(int daysAhead)
 void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeight)
 {
 	gfx.setFont();	// resets to default little font guy
+	gfx.setTextColor(GxEPD_BLACK);
 	gfx.setCursor(width*(daysAfterToday), heightStart);
 	char c1 = WeatherDays[daysAfterToday].DayOfWeek[0];
 	char c2 = WeatherDays[daysAfterToday].DayOfWeek[1];
@@ -632,21 +636,26 @@ void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeigh
 void DrawConnectionInstructions()
 {
 	gfx.setFont(font9);
-	gfx.setCursor(0, 69);
+	gfx.setTextColor(GxEPD_BLACK);
+	gfx.setCursor(0, 19);
 	gfx.println("Connect to ATMO WiFi network.");
 	gfx.println("Then, browse to at.mo (or 1.1.1.1)");
 	gfx.println();
 	gfx.println("Configure, and enjoy!");
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.update();
+	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	//gfx.update();
 }
 
 void DrawFailedToConnectToSite()
 {
 	gfx.setFont(font9);
+	gfx.setTextColor(GxEPD_BLACK);
 	gfx.setCursor(0, 60 + 9);
 	gfx.println("Failed to connect to sites.");
 	gfx.println("Check your internet connection.");
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, true);
+	//gfx.updateToWindow(0,0,
 	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
 	gfx.update();
 }
@@ -654,17 +663,19 @@ void DrawFailedToConnectToSite()
 void DrawFailedToConnectToWiFi()
 {
 	gfx.setFont(font9);
+	gfx.setTextColor(GxEPD_BLACK);
 	gfx.setCursor(0, 60 + 9);
 	gfx.println("Failed to connect to WiFi.");
 	gfx.println("Check your router.");
-	gfx.update();
+	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	//gfx.update();
 }
 
 void DrawUpdating()
 {
 	int setback = 0;
-	gfx.setTextColor(GxEPD_BLACK);
 	gfx.setFont(font9);
+	gfx.setTextColor(GxEPD_BLACK);
 	setback = HalfWidthOfText("updating", 9);
 	gfx.setCursor(gfx.width() / 2 - setback, 20 + 9);
 	gfx.println("updating");
@@ -858,14 +869,12 @@ void HostWebsiteForInit()
 	IPAddress igateway(1, 1, 1, 1);
 	IPAddress isubnet(255, 255, 255, 0);
 	WiFi.softAPConfig(iip, igateway, isubnet);
-	//delay(10);
 	dnsServer.start(DNS_PORT, "*", iip);
 
 	const String root = "/";
 	server.on("/", handle_OnConnect);	// this parses an error in intellisense but is totally fine
 	//server.on(", handle_OnConnect);
 	//DrawConnectionInstructions();
-	DrawFailedToConnectToSite();
 
 	server.begin();
 
