@@ -1,9 +1,19 @@
+
 #define NO_METRIC 1
-// TODO detect time offset when awake and adjust to stay close to 24hrs (bc drifts in deepsleep)
+// TODO consider clock reset from pin, make sure timer makes sense (doesn't currently)
 // TODO remove FREERTOS thing and try swapping cores, does it save time?
 #include <SPI.h>
+#include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
+#include <WiFiAP.h>
+//#include <WiFiServer.h>
+//#include <ESP8266WebServer.h>
+#include <FS.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
+#include <DNSServer.h>
+//#include <HTTP_Method.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include "esp32/ulp.h"
@@ -21,6 +31,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <TimeLib.h>
+#include <rom/rtc.h>
 //#include <Fonts/FreeMonoBold9pt7b.h>
 //#include <Fonts/FreeMonoBold12pt7b.h>
 // make your own fonts here: http://oleddisplay.squix.ch/
@@ -35,9 +46,11 @@
 GxIO_Class io(SPI, /*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16);	// arbitrary selection of 17, 16
 GxEPD_Class gfx(io, /*RST=*/ 16, /*BUSY=*/ 4);				 // arbitrary selection of (16), 4
 
+const byte DNS_PORT = 53;
+DNSServer dnsServer;
+WebServer server(80);
 HTTPClient weathercurrenthttp, geolocatehttp;
 TaskHandle_t* WiFiTask;
-static bool WiFiStarted = false;
 int wifisection, displaysection;
 unsigned long lastConnectionTime = 0;          // Last time you connected to the server, in milliseconds
 // 1000000LL is one second
@@ -52,6 +65,8 @@ const uint64_t OneDay = OneHour * 24;
 //const uint64_t SleepTimeMicroseconds = OneHour * 24LL;
 bool SleepDriftWasTooFast = false;	// flag to handle math bc we're using uint64 and need to handle negatives
 uint64_t SleepDriftCompensation = 0;
+
+#define pp Serial.println
 
 /*
 NOTE:
@@ -90,6 +105,9 @@ const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b5
 const char* ssid = "slow";
 const char* password = "bingbangbong";
 
+const char* selfhostedWifiName = "atmo";
+String header;
+
 class SavedSettings
 {
 public:
@@ -97,6 +115,8 @@ public:
 	String city;
 	float lat;
 	float lon;
+	String wifi_ssid;
+	String wifi_password;
 };
 Preferences prefs;	// used to save and load from memory
 SavedSettings savedSettings; // loads from memory into RAM, used for refernce afterward
@@ -131,17 +151,18 @@ int TodayLow;
 #define WIFI_TIMEOUT_MS 10000 // 10 sec to connect to wifi?
 const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
 const GFXfont* font12 = &FreeSans12pt7b;
-
+bool HostSetupSite = false;
 // TODO andymule FOR RELEASE BUILD Disabling all logging and holding the UART disable pin high only increases boot time by around 20 ms?
 void setup() {
 	wifisection = millis();
-	bool runForever = true;
-	xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 2048, &runForever, 1, WiFiTask, 0); // start wifi on other core
 
 	//struct timeval wakeTime;
 	//gettimeofday(&wakeTime, NULL);
 	//int sleep_time_ms = (wakeTime.tv_sec - sleep_enter_time.tv_sec) * 1000 + (wakeTime.tv_usec - sleep_enter_time.tv_usec) / 1000;
 	Serial.begin(128000);
+
+	verbose_print_reset_reason(rtc_get_reset_reason(1));
+
 	//Serial.print("Time spent in deep sleep : ");
 	//Serial.print(sleep_time_ms);
 	//Serial.println(" ms");
@@ -176,7 +197,15 @@ void setup() {
 	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TOUCHPAD:
 	{
 		prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
-		Serial.println("Wakeup caused by touchpad"); break;
+		Serial.println("Wakeup caused by touchpad");
+		int pad = get_wakeup_gpio_touchpad();
+		pp("PAD:" + String(pad));
+		if (pad == 27)
+		{
+			HostSetupSite = true;
+			//goto skipmain;
+		}
+		break;
 	}
 	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_ULP: Serial.println("Wakeup caused by ULP program"); break;
 	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_EXT0: Serial.println("Wakeup caused by EXT0"); break;
@@ -191,32 +220,40 @@ void setup() {
 	}
 	}
 
-	DrawUpdating();
-
-	//StartWiFi(nullptr);
-	lastConnectionTime = millis();
-
 	savedSettings.valid = prefs.getBool("valid");
 	if (savedSettings.valid)
 	{
 		ReloadSavedSettings();
 	}
-	else
+
+	if (HostSetupSite)
+	{
+		HostWebsiteForInit();
+		return;
+	}
+
+	bool runForever = true;
+	xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 2048, &runForever, 1, WiFiTask, 0); // start wifi on other core // TODO Move earlier but dont start if i host the server
+
+	DrawUpdating();
+
+	lastConnectionTime = millis();
+
+	if (!savedSettings.valid)
 	{
 		Serial.println("getting geolocation from internet");
 		geolocatehttp.setTimeout(SITE_TIMEOUT_MS);
 		EnsureWiFiIsStarted();
 		geolocatehttp.begin(geolocatestring);
 		int geoHttpCode = geolocatehttp.GET();
-
 		if (geoHttpCode == 200)
 		{
 			ParseGeoLocation();
 			//geolocatehttp.end(); 
 			// we dont end the geolocatehttp to save time TODO does this actually save time?
 		}
-		else { // FAILED TO CONNECT TO GEOLOCATE SITE
-			FailedToConnectToSite();	// draws to epaper
+		else if (geoHttpCode != 200) { // FAILED TO CONNECT TO GEOLOCATE SITE
+			DrawFailedToConnectToSite();	// draws to epaper
 			Sleep();
 		}
 	}
@@ -237,8 +274,8 @@ void setup() {
 		ParseWeatherAndTime();
 		// we dont end the weathercurrenthttp to save time TODO does this actually save time?
 	}
-	else {
-		FailedToConnectToSite();
+	else if (weatherHttpCode != 200) {
+		DrawFailedToConnectToSite();
 		Serial.println("Error on Weather HTTP request:" + weatherHttpCode);
 		Sleep();
 	}
@@ -258,115 +295,86 @@ void setup() {
 
 void Sleep()
 {
-	gfx.powerDown();	// saves power probably?? TODO check
-	EnableWakeOnTilt();	// actually allows wake on pin touch???
+	// TODO blog says: It’s worth setting all pins to inputs before sleep, to ensure there are no active GPIO pull downs consuming power. 
+	gfx.powerDown();	// saves power but is it worth the time? is this better to NOT do?
+	EnableTouchpadWake();	// actually allows wake on pin touch???
 	uint64_t sleepTime = 0;
 	if (SleepDriftWasTooFast)
 		sleepTime = OneDay + SleepDriftCompensation; // woke up early from being too fast, so sleep longer next time
 	else
 		sleepTime = OneDay - SleepDriftCompensation;
-	int result = esp_sleep_enable_timer_wakeup(sleepTime);
+	//pp((unsigned long int)SleepDriftCompensation);
+	//pp((unsigned long int) sleepTime);
+	//pp(SleepDriftWasTooFast);
+	esp_sleep_enable_timer_wakeup(sleepTime);
+	//Serial.print("sleep time: ");
+	//uint64_t xx = sleepTime / 1000000000ULL;
+	//if (xx > 0) Serial.print((long)xx);
+	//Serial.println((long)(sleepTime - xx * 1000000000));
 	//gettimeofday(&sleep_enter_time, NULL);
+	//esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+	esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF);
 	esp_deep_sleep_start();
 }
 
-void touchpadCallback() {
-	//Serial.println("TOUCHPAD CALLBACK");
-}
-
-void EnableWakeOnTilt()
+void EnableTouchpadWake()
 {
 	// TODO andymule detect current orientation and set interupts accordingly
 	//esp_sleep_enable_ext1_wakeup(T1, ESP_EXT1_WAKEUP_ANY_HIGH);
 	//esp_sleep_enable_ext0_wakeup(T1, ESP_EXT1_WAKEUP_ANY_HIGH);
-	//touchAttachInterrupt(T1, touchpadCallback, Threshold);
-	touchAttachInterrupt(T2, touchpadCallback, Threshold);
+	touchAttachInterrupt(T2, NULL, Threshold);
+	touchAttachInterrupt(T7, NULL, Threshold);
 	esp_sleep_enable_touchpad_wakeup();
 	//(uint32_t)esp_sleep_get_touchpad_wakeup_status();
 }
 
-int HalfWidthOfText(String text, int size)
-{
-	return text.length()*size / 2;
-}
-
-void DrawDaysAhead(int daysAhead)
-{
-	for (int i = 0; i < daysAhead; i++)
+int get_wakeup_gpio_touchpad() {	// stole from internet. possible these aren't all real
+	touch_pad_t pin;
+	touchPin = esp_sleep_get_touchpad_wakeup_status();
+	switch (touchPin)
 	{
-		DrawDayOfWeek(i, (gfx.width() / daysAhead), 90, 9);
+	case 0: return 4;
+	case 1: return 0;
+	case 2: return 2;
+	case 3: return 15;
+	case 4: return 13;
+	case 5: return 12;
+	case 6: return 14;
+	case 7: return 27;
+	case 8: return 33;
+	case 9: return 32;
+	default: return -1;
 	}
-}
-
-void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeight)
-{
-	gfx.setFont();	// resets to default little font guy
-	gfx.setCursor(width*(daysAfterToday), heightStart);
-	char c1 = WeatherDays[daysAfterToday].DayOfWeek[0];
-	char c2 = WeatherDays[daysAfterToday].DayOfWeek[1];
-	char c3 = WeatherDays[daysAfterToday].DayOfWeek[2];
-	String s;
-	s = s + c1 + c2 + c3;
-	//char* smallDay = "   "; //blank 3 chars
-	//strncpy(smallDay, WeatherDays[daysAfterToday].DayOfWeek, 3); // TODO why does strncpy crash esp?
-	gfx.println(s);
-	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight);
-
-	String CheckText = String(WeatherDays[daysAfterToday].SkyText);
-	//String CheckText = String(WeatherDays[daysAfterToday].PrecipText);
-	String PrintText = String(CheckText);	// TODO smarter way to display just one word, need a real parser
-	if (CheckText.indexOf(" ") > 0)
-	{
-		PrintText = CheckText.substring(CheckText.lastIndexOf(" ") + 1, CheckText.length());
-	}
-	gfx.println(PrintText);
-
-	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight * 2);
-	gfx.println(WeatherDays[daysAfterToday].High);
-	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight * 3);
-	gfx.println(WeatherDays[daysAfterToday].Low);
-}
-
-void FailedToConnectToSite()
-{
-	Serial.println("Error on Geolocate request");
-	gfx.setFont(font9);
-	gfx.setCursor(0, 60 + 9);
-	gfx.println("Failed to connect to sites.");
-	gfx.println("Check your internet connection.");
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.update();
-}
-
-void FailedToConnectToWiFi()
-{
-	//gfx.init();
-	//gfx.eraseDisplay(true);
-	//gfx.eraseDisplay();
-	gfx.setFont(font9);
-	gfx.setCursor(0, 60 + 9);
-	gfx.println("Failed to connect to WiFi.");
-	gfx.println("Check your router.");
-	gfx.update();
+	return -1;
 }
 
 void EnsureWiFiIsStarted()
 {
 	bool deleteTask = false;
-	while (WiFiStarted == false)
+	int counter = 0;
+	while (!WiFi.isConnected())
 	{
 		deleteTask = true;
-		Serial.print(".");
+		//if (counter % 10 == 0)
+		//{
+		//	counter = 0;
+		//	//Serial.println(".");
+		//}
+		//counter++;
 		delay(10);
 	}
 	if (deleteTask) {
 		vTaskDelete(WiFiTask);
-		Serial.println();
+		//Serial.println();
 	}
 }
 
-void loop() { // this will never run!
-	Sleep();
+void loop() {
+	pp("doin it!");
+	dnsServer.processNextRequest();
+	server.handleClient();
+	delay(300);
+	//TODO if press pad again, go back to normal operation
 }
 
 ////#########################################################################################
@@ -395,18 +403,18 @@ void StartWiFi(void *loopForever) {
 	while (WiFi.status() != WL_CONNECTED) {
 		delay(WIFI_DELAY_CHECK_TIME_MS); //Serial.print(F("."));
 		if (connAttempts > WIFI_TIMEOUT_MS / WIFI_DELAY_CHECK_TIME_MS) {
-			FailedToConnectToWiFi();
+			DrawFailedToConnectToWiFi();
 			Sleep();
 		}
 		connAttempts++;
 	}
-	WiFiStarted = true;
+	Serial.println("WIFI IS UP");
 	while (loopForever)
 		delay(1000);
 }
 
 void StopWiFi() {
-	WiFi.disconnect(true);
+	//WiFi.disconnect(true);
 	WiFi.mode(WIFI_OFF);
 }
 
@@ -466,10 +474,14 @@ void SetClockAndDriftCompensate()
 	time_t oldTime = now();
 	time_t newTime = makeTime(tm);
 	setTime(newTime);
+	//pp(oldTime);
+	//pp(newTime);
 	int64_t timeDriftSeconds = newTime - oldTime; // negative if i woke up early, bc oldtime was too fast
 	SleepDriftWasTooFast = (timeDriftSeconds < 0);
 	if (SleepDriftWasTooFast)
 		timeDriftSeconds *= -1;
+	if (oldTime < 1579461559)
+		timeDriftSeconds = 0;	// TODO make this whole thing not terrible, set time in hard wake eg
 	SleepDriftCompensation = (uint64_t)timeDriftSeconds * OneSecond;
 }
 
@@ -501,13 +513,11 @@ void ParseGeoLocation()
 		Serial.println(error.c_str());
 		Sleep();
 	}
-
 	String city = geoDoc["city"].as<String>();
 	city.replace(" ", "%20");
 	savedSettings.lat = geoDoc["latitude"];
 	savedSettings.lon = geoDoc["longitude"];
 	savedSettings.city = const_cast<char*>(city.c_str());
-
 	prefs.putBool("valid", true);
 	prefs.putFloat("lat", savedSettings.lat);
 	prefs.putFloat("lon", savedSettings.lon);
@@ -572,8 +582,82 @@ void DrawDisplay()
 
 	DrawDaysAhead(6);
 
-	//gfx.update();
-	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	gfx.update();
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, true);
+}
+
+
+int HalfWidthOfText(String text, int size)
+{
+	return text.length()*size / 2;
+}
+
+void DrawDaysAhead(int daysAhead)
+{
+	for (int i = 0; i < daysAhead; i++)
+	{
+		DrawDayOfWeek(i, (gfx.width() / daysAhead), 90, 9);
+	}
+}
+
+void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeight)
+{
+	gfx.setFont();	// resets to default little font guy
+	gfx.setCursor(width*(daysAfterToday), heightStart);
+	char c1 = WeatherDays[daysAfterToday].DayOfWeek[0];
+	char c2 = WeatherDays[daysAfterToday].DayOfWeek[1];
+	char c3 = WeatherDays[daysAfterToday].DayOfWeek[2];
+	String s;
+	s = s + c1 + c2 + c3;
+	//char* smallDay = "   "; //blank 3 chars
+	//strncpy(smallDay, WeatherDays[daysAfterToday].DayOfWeek, 3); // TODO why does strncpy crash esp?
+	gfx.println(s);
+	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight);
+
+	String CheckText = String(WeatherDays[daysAfterToday].SkyText);
+	//String CheckText = String(WeatherDays[daysAfterToday].PrecipText);
+	String PrintText = String(CheckText);	// TODO smarter way to display just one word, need a real parser
+	if (CheckText.indexOf(" ") > 0)
+	{
+		PrintText = CheckText.substring(CheckText.lastIndexOf(" ") + 1, CheckText.length());
+	}
+	gfx.println(PrintText);
+
+	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight * 2);
+	gfx.println(WeatherDays[daysAfterToday].High);
+	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight * 3);
+	gfx.println(WeatherDays[daysAfterToday].Low);
+}
+
+void DrawConnectionInstructions()
+{
+	gfx.setFont(font9);
+	gfx.setCursor(0, 69);
+	gfx.println("Connect to ATMO WiFi network.");
+	gfx.println("Then, browse to at.mo (or 1.1.1.1)");
+	gfx.println();
+	gfx.println("Configure, and enjoy!");
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	gfx.update();
+}
+
+void DrawFailedToConnectToSite()
+{
+	gfx.setFont(font9);
+	gfx.setCursor(0, 60 + 9);
+	gfx.println("Failed to connect to sites.");
+	gfx.println("Check your internet connection.");
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	gfx.update();
+}
+
+void DrawFailedToConnectToWiFi()
+{
+	gfx.setFont(font9);
+	gfx.setCursor(0, 60 + 9);
+	gfx.println("Failed to connect to WiFi.");
+	gfx.println("Check your router.");
+	gfx.update();
 }
 
 void DrawUpdating()
@@ -758,4 +842,98 @@ String shortWeatherType(int skyInfo)
 		return "hazy";
 	}
 	return "";
+}
+
+void handle_OnConnect() {
+	Serial.println("GPIO4 Status: OFF | GPIO5 Status: OFF");
+	server.send(200, "text/html", SendHTML(1, 1));
+}
+
+void HostWebsiteForInit()
+{
+	WiFi.mode(WIFI_AP);
+	WiFi.softAP(selfhostedWifiName);
+	delay(50);
+	IPAddress iip(1, 1, 1, 1);
+	IPAddress igateway(1, 1, 1, 1);
+	IPAddress isubnet(255, 255, 255, 0);
+	WiFi.softAPConfig(iip, igateway, isubnet);
+	//delay(10);
+	dnsServer.start(DNS_PORT, "*", iip);
+
+	const String root = "/";
+	server.on("/", handle_OnConnect);	// this parses an error in intellisense but is totally fine
+	//server.on(", handle_OnConnect);
+	//DrawConnectionInstructions();
+	DrawFailedToConnectToSite();
+
+	server.begin();
+
+	IPAddress IP = WiFi.softAPIP();
+	Serial.print("page address: ");
+	Serial.println(IP);
+}
+
+String SendHTML(uint8_t led1stat, uint8_t led2stat) {
+	String ptr = "<!DOCTYPE html> <html>\n";
+	ptr += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
+	ptr += "<title>LED Control</title>\n";
+	ptr += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}\n";
+	ptr += "body{margin-top: 50px;} h1 {color: #444444;margin: 50px auto 30px;} h3 {color: #444444;margin-bottom: 50px;}\n";
+	ptr += ".button {display: block;width: 80px;background-color: #3498db;border: none;color: white;padding: 13px 30px;text-decoration: none;font-size: 25px;margin: 0px auto 35px;cursor: pointer;border-radius: 4px;}\n";
+	ptr += ".button-on {background-color: #3498db;}\n";
+	ptr += ".button-on:active {background-color: #2980b9;}\n";
+	ptr += ".button-off {background-color: #34495e;}\n";
+	ptr += ".button-off:active {background-color: #2c3e50;}\n";
+	ptr += "p {font-size: 14px;color: #888;margin-bottom: 10px;}\n";
+	ptr += "</style>\n";
+	ptr += "</head>\n";
+	ptr += "<body>\n";
+	ptr += "<h1>Atmo</h1>\n";
+	ptr += "<h3>Configuration</h3>\n";
+
+	if (led1stat)
+	{
+		ptr += "<p>LED1 Status: ON</p><a class=\"button button-off\" href=\"/led1off\">OFF</a>\n";
+	}
+	else
+	{
+		ptr += "<p>LED1 Status: OFF</p><a class=\"button button-on\" href=\"/led1on\">ON</a>\n";
+	}
+
+	if (led2stat)
+	{
+		ptr += "<p>LED2 Status: ON</p><a class=\"button button-off\" href=\"/led2off\">OFF</a>\n";
+	}
+	else
+	{
+		ptr += "<p>LED2 Status: OFF</p><a class=\"button button-on\" href=\"/led2on\">ON</a>\n";
+	}
+
+	ptr += "</body>\n";
+	ptr += "</html>\n";
+	return ptr;
+}
+
+void verbose_print_reset_reason(RESET_REASON reason)
+{
+	switch (reason)
+	{
+	case 1: Serial.println("Vbat power on reset"); break;
+	case 3: Serial.println("Software reset digital core"); break;
+	case 4: Serial.println("Legacy watch dog reset digital core"); break;
+	case 5: Serial.println("Deep Sleep reset digital core"); break;
+	case 6: Serial.println("Reset by SLC module, reset digital core"); break;
+	case 7: Serial.println("Timer Group0 Watch dog reset digital core"); break;
+	case 8: Serial.println("Timer Group1 Watch dog reset digital core"); break;
+	case 9: Serial.println("RTC Watch dog Reset digital core"); break;
+	case 10: Serial.println("Instrusion tested to reset CPU"); break;
+	case 11: Serial.println("Time Group reset CPU"); break;
+	case 12: Serial.println("Software reset CPU"); break;
+	case 13: Serial.println("RTC Watch dog Reset CPU"); break;
+	case 14: Serial.println("for APP CPU, reseted by PRO CPU"); break;
+	case 15: Serial.println("Reset when the vdd voltage is not stable"); break;
+	case 16: Serial.println("RTC Watch dog reset digital core and rtc module"); break;
+	default: Serial.println("NO_MEAN");
+	}
 }
