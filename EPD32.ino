@@ -2,6 +2,7 @@
 #define NO_METRIC 1
 // TODO consider clock reset from pin, make sure timer makes sense (doesn't currently)
 // TODO remove FREERTOS thing and try swapping cores, does it save time?
+// TODO detect wrong password? explicitly 
 #include <SPI.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -102,9 +103,6 @@ const String weatherLanguage = "&language=";	// https://developer.here.com/docum
 
 const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8"; //key=ab925796fd105310f825bbdceece059e
 
-const char* ssid = "slow";
-const char* password = "bingbangbong";
-
 const char* selfhostedWifiName = "ATMO";
 String header;
 
@@ -196,14 +194,13 @@ void setup() {
 	}
 	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TOUCHPAD:
 	{
-		prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
+		prefs.putBool("valid", true); //invalidate location data // TODO indicate this on display
 		Serial.println("Wakeup caused by touchpad");
 		int pad = get_wakeup_gpio_touchpad();
 		pp("PAD:" + String(pad));
 		if (pad == 27)
 		{
 			HostSetupSite = true;
-			//goto skipmain;
 		}
 		break;
 	}
@@ -215,7 +212,7 @@ void setup() {
 		gfx.eraseDisplay(true);
 		gfx.eraseDisplay();
 		Serial.println("Wake from RESET or other");
-		prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
+		//prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
 		memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);
 	}
 	}
@@ -226,7 +223,7 @@ void setup() {
 		ReloadSavedSettings();
 	}
 
-	if (HostSetupSite)
+	if (HostSetupSite || savedSettings.wifi_ssid == "")
 	{
 		DrawConnectionInstructions();
 		HostWebsiteForInit();
@@ -371,11 +368,128 @@ void EnsureWiFiIsStarted()
 }
 
 void loop() {
-	pp("doin it!");
+	//pp("doin it!");
 	dnsServer.processNextRequest();
 	server.handleClient();
 	delay(300);
 	//TODO if press pad again, go back to normal operation
+}
+
+void HostWebsiteForInit()
+{
+	WiFi.mode(WIFI_AP);
+	WiFi.softAP(selfhostedWifiName);
+	delay(50);
+	IPAddress iip(1, 1, 1, 1);
+	IPAddress igateway(1, 1, 1, 1);
+	IPAddress isubnet(255, 255, 255, 0);
+	WiFi.softAPConfig(iip, igateway, isubnet);
+	dnsServer.start(DNS_PORT, "*", iip);
+
+	const String root = "/";
+	server.on("/", handle_OnConnect);	// this parses an error in intellisense but is totally fine
+	server.on("/exit", handle_ExitSetup);	// this parses an error in intellisense but is totally fine
+	//server.on(", handle_OnConnect);
+	//DrawConnectionInstructions();
+
+	server.begin();
+
+	IPAddress IP = WiFi.softAPIP();
+	Serial.print("page address: ");
+	Serial.println(IP);
+}
+
+void handle_ExitSetup()
+{
+	Serial.println("EXIT SETUP!");
+	for (int i = 0; i < server.args(); i++) {
+		if (server.argName(i) == "n") // wifi name
+		{
+			savedSettings.wifi_ssid = server.arg(i);
+			prefs.putString("wifi_ssid", savedSettings.wifi_ssid);
+		}
+		if (server.argName(i) == "p") // wifi name
+		{
+			savedSettings.wifi_password = server.arg(i);
+			prefs.putString("wifi_password", savedSettings.wifi_password);
+		}
+	}
+	//Serial.println(server.argName(i) + ":" + server.arg(i));
+	gfx.eraseDisplay();
+	prefs.putBool("valid", true); //invalidate location data // TODO indicate this on display
+	String success = "<!DOCTYPE html> <html>\n Success!! Check your Atmo device to verify the connection.</html>\n";
+	server.send(200, "text/html", success);
+	server.close();
+	delay(10);	// make sure we write
+	esp_deep_sleep(1 * OneSecond);	// TODO is this best? prolly need to flag to avoid hard screen blanking
+}
+
+void handle_OnConnect() {
+	Serial.println("New Connection!");
+	//for (int i = 0; i < server.args(); i++) {
+	//	if (server.argName(i) == "n") // wifi name
+	//	{
+	//		savedSettings.wifi_ssid = server.arg(i);
+	//	}
+	//	if (server.argName(i) == "p") // wifi name
+	//	{
+	//		savedSettings.wifi_password = server.arg(i);
+	//	}
+	//	//Serial.println(server.argName(i) + ":" + server.arg(i));
+	//}
+	server.send(200, "text/html", SendHTML());
+}
+
+// TODO drop down auto-populate menu, option for text?
+// TODO validate settings on exit?
+String SendHTML() {
+	String ptr = "<!DOCTYPE html> <html>\n";
+	ptr += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
+	ptr += "<title>LED Control</title>\n";
+	ptr += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}\n";
+	ptr += "body{margin-top: 50px;} h1 {color: #444444;margin: 50px auto 30px;} h3 {color: #444444;margin-bottom: 50px;}\n";
+	ptr += ".button {display: block;width: 80px;background-color: #3498db;border: none;color: white;padding: 13px 30px;text-decoration: none;font-size: 25px;margin: 0px auto 35px;cursor: pointer;border-radius: 4px;}\n";
+	ptr += ".button-on {background-color: #3498db;}\n";
+	ptr += ".button-on:active {background-color: #2980b9;}\n";
+	ptr += ".button-off {background-color: #34495e;}\n";
+	ptr += ".button-off:active {background-color: #2c3e50;}\n";
+	ptr += "p {font-size: 14px;color: #888;margin-bottom: 10px;}\n";
+	ptr += "</style>\n";
+	ptr += "</head>\n";
+	ptr += "<body>\n";
+	ptr += "<h1>Atmo</h1>\n";
+	ptr += "<h3>Configuration</h3>\n";
+		
+		ptr += "<form action=\"/exit\" method=GET>WiFi Network: <input type=text name=n value=\"";
+		ptr += prefs.getString("wifi_ssid");
+		ptr += "\"><br><br>";
+
+		ptr += "WiFi Password: <input type=text name=p value=\"";
+		ptr += prefs.getString("wifi_password");
+		ptr += "\"><br><input type=submit></form>";
+	
+	//ptr += "<br><br><a class=\"button button-off\" href=\"/exit\">OFF</a>\n";
+	//if (led1stat)
+	//{
+	//	
+	//}
+	//else
+	//{
+	//	ptr += "<p>LED1 Status: OFF</p><a class=\"button button-on\" href=\"/led1on\">ON</a>\n";
+	//}
+
+	//if (led2stat)
+	//{
+	//	ptr += "<p>LED2 Status: ON</p><a class=\"button button-off\" href=\"/led2off\">OFF</a>\n";
+	//}
+	//else
+	//{
+	//	ptr += "<p>LED2 Status: OFF</p><a class=\"button button-on\" href=\"/led2on\">ON</a>\n";
+	//}
+
+	ptr += "</body>\n";
+	ptr += "</html>\n";
+	return ptr;
 }
 
 ////#########################################################################################
@@ -400,10 +514,11 @@ void loop() {
 void StartWiFi(void *loopForever) {
 	int connAttempts = 0;
 	WiFi.mode(WIFI_STA);
-	WiFi.begin(ssid, password);
+	WiFi.begin(savedSettings.wifi_ssid.c_str(), savedSettings.wifi_password.c_str());
 	while (WiFi.status() != WL_CONNECTED) {
 		delay(WIFI_DELAY_CHECK_TIME_MS); //Serial.print(F("."));
 		if (connAttempts > WIFI_TIMEOUT_MS / WIFI_DELAY_CHECK_TIME_MS) {
+			prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
 			DrawFailedToConnectToWiFi();
 			Sleep();
 		}
@@ -533,6 +648,8 @@ void ReloadSavedSettings()
 	savedSettings.lat = prefs.getFloat("lat");
 	savedSettings.lon = prefs.getFloat("lon");
 	savedSettings.city = prefs.getString("city");
+	savedSettings.wifi_password = prefs.getString("wifi_password");
+	savedSettings.wifi_ssid = prefs.getString("wifi_ssid");
 }
 
 // ########################################################################################
@@ -639,9 +756,9 @@ void DrawConnectionInstructions()
 	gfx.setTextColor(GxEPD_BLACK);
 	gfx.setCursor(0, 19);
 	gfx.println("Connect to ATMO WiFi network.");
-	gfx.println("Then, browse to at.mo (or 1.1.1.1)");
+	gfx.println("Then, browse to at.mo");
 	gfx.println();
-	gfx.println("Configure, and enjoy!");
+	gfx.println("Configure and enjoy!");
 	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
 	//gfx.update();
 }
@@ -653,20 +770,17 @@ void DrawFailedToConnectToSite()
 	gfx.setCursor(0, 60 + 9);
 	gfx.println("Failed to connect to sites.");
 	gfx.println("Check your internet connection.");
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, true);
-	//gfx.updateToWindow(0,0,
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.update();
+	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	//gfx.update();
 }
 
 void DrawFailedToConnectToWiFi()
 {
 	gfx.setFont(font9);
 	gfx.setTextColor(GxEPD_BLACK);
-	gfx.setCursor(0, 60 + 9);
+	gfx.setCursor(0, 30 + 9);
 	gfx.println("Failed to connect to WiFi.");
-	gfx.println("Check your router.");
+	gfx.println("Check your router or Atmo settings.");
 	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
 	//gfx.update();
 }
@@ -853,75 +967,6 @@ String shortWeatherType(int skyInfo)
 		return "hazy";
 	}
 	return "";
-}
-
-void handle_OnConnect() {
-	Serial.println("GPIO4 Status: OFF | GPIO5 Status: OFF");
-	server.send(200, "text/html", SendHTML(1, 1));
-}
-
-void HostWebsiteForInit()
-{
-	WiFi.mode(WIFI_AP);
-	WiFi.softAP(selfhostedWifiName);
-	delay(50);
-	IPAddress iip(1, 1, 1, 1);
-	IPAddress igateway(1, 1, 1, 1);
-	IPAddress isubnet(255, 255, 255, 0);
-	WiFi.softAPConfig(iip, igateway, isubnet);
-	dnsServer.start(DNS_PORT, "*", iip);
-
-	const String root = "/";
-	server.on("/", handle_OnConnect);	// this parses an error in intellisense but is totally fine
-	//server.on(", handle_OnConnect);
-	//DrawConnectionInstructions();
-
-	server.begin();
-
-	IPAddress IP = WiFi.softAPIP();
-	Serial.print("page address: ");
-	Serial.println(IP);
-}
-
-String SendHTML(uint8_t led1stat, uint8_t led2stat) {
-	String ptr = "<!DOCTYPE html> <html>\n";
-	ptr += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
-	ptr += "<title>LED Control</title>\n";
-	ptr += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}\n";
-	ptr += "body{margin-top: 50px;} h1 {color: #444444;margin: 50px auto 30px;} h3 {color: #444444;margin-bottom: 50px;}\n";
-	ptr += ".button {display: block;width: 80px;background-color: #3498db;border: none;color: white;padding: 13px 30px;text-decoration: none;font-size: 25px;margin: 0px auto 35px;cursor: pointer;border-radius: 4px;}\n";
-	ptr += ".button-on {background-color: #3498db;}\n";
-	ptr += ".button-on:active {background-color: #2980b9;}\n";
-	ptr += ".button-off {background-color: #34495e;}\n";
-	ptr += ".button-off:active {background-color: #2c3e50;}\n";
-	ptr += "p {font-size: 14px;color: #888;margin-bottom: 10px;}\n";
-	ptr += "</style>\n";
-	ptr += "</head>\n";
-	ptr += "<body>\n";
-	ptr += "<h1>Atmo</h1>\n";
-	ptr += "<h3>Configuration</h3>\n";
-
-	if (led1stat)
-	{
-		ptr += "<p>LED1 Status: ON</p><a class=\"button button-off\" href=\"/led1off\">OFF</a>\n";
-	}
-	else
-	{
-		ptr += "<p>LED1 Status: OFF</p><a class=\"button button-on\" href=\"/led1on\">ON</a>\n";
-	}
-
-	if (led2stat)
-	{
-		ptr += "<p>LED2 Status: ON</p><a class=\"button button-off\" href=\"/led2off\">OFF</a>\n";
-	}
-	else
-	{
-		ptr += "<p>LED2 Status: OFF</p><a class=\"button button-on\" href=\"/led2on\">ON</a>\n";
-	}
-
-	ptr += "</body>\n";
-	ptr += "</html>\n";
-	return ptr;
 }
 
 void verbose_print_reset_reason(RESET_REASON reason)
