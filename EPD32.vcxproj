@@ -109,10 +109,11 @@
     </None>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="atmo_parsing.h" />
     <ClInclude Include="atmo_sleep.h" />
     <ClInclude Include="atmo_types.h" />
     <ClInclude Include="atmo_wakereasons.h" />
+    <ClInclude Include="atmo_webrequests.h" />
+    <ClInclude Include="atmo_webserver.h" />
     <ClInclude Include="atmo_wifi.h" />
     <ClInclude Include="atmo_gfx.h" />
     <ClInclude Include="Icon2.h" />

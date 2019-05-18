@@ -35,7 +35,6 @@ int TodayLow;
 
 void ReloadSavedSettings()
 {
-	Serial.println("loaded saved lat and lon");
 	savedSettings.lat = prefs.getFloat("lat");
 	savedSettings.lon = prefs.getFloat("lon");
 	savedSettings.city = prefs.getString("city");

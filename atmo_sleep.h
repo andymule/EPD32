@@ -25,6 +25,8 @@ source. They are pins: 0,2,4,12-15,25-27,32-39.
 RTC_DATA_ATTR int bootCount = 0;
 touch_pad_t touchPin;
 
+enum WakeReason { HardReset, TimedRefresh, EnterSettings, RefreshNow };
+
 /*
 //https://github.com/Serpent999/ESP32_Touch_LED/blob/master/Touch_LED/Touch_LED.ino //WEIRD example of touch? might be useful
 Touch Sensor Pin Layout
@@ -68,7 +70,7 @@ void EnableTouchpadWake()
 	//(uint32_t)esp_sleep_get_touchpad_wakeup_status();
 }
 
-void Sleep()
+void DeepSleep()
 {
 	// TODO blog says: It’s worth setting all pins to inputs before sleep, to ensure there are no active GPIO pull downs consuming power. 
 	gfx.powerDown();	// saves power but is it worth the time? is this better to NOT do?
@@ -113,3 +115,59 @@ int get_wakeup_gpio_touchpad() {	// stole from internet. possible these aren't a
 	return -1;
 }
 
+WakeReason CheckResetReason()
+{
+	uint64_t wakeupBit = esp_sleep_get_ext1_wakeup_status();
+	if (wakeupBit & GPIO_SEL_33) {
+		// GPIO 33 woke up
+	}
+	else if (wakeupBit & GPIO_SEL_34) {
+		// GPIO 34
+	}
+
+	esp_sleep_wakeup_cause_t wakeup_reason;
+	wakeup_reason = esp_sleep_get_wakeup_cause();
+	switch (wakeup_reason) {
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TIMER: {
+		Serial.println("Wake up from timer.");
+		return WakeReason::TimedRefresh;
+		break;
+	}
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_GPIO:
+	{
+		Serial.println("Wakeup caused by GPIO"); break;
+	}
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_UART:
+	{
+		Serial.println("Wakeup caused by UART??"); break;
+	}
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TOUCHPAD:
+	{
+		prefs.putBool("valid", true); //invalidate location data // TODO indicate this on display
+		Serial.println("Wakeup caused by touchpad");
+		int pad = get_wakeup_gpio_touchpad();
+		Serial.println("PAD:" + String(pad));
+		if (pad == 27)
+		{
+			return WakeReason::EnterSettings;
+		}
+		else
+		{
+			return WakeReason::RefreshNow;
+		}
+		break;
+	}
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_ULP: Serial.println("Wakeup caused by ULP program"); break;
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_EXT0: Serial.println("Wakeup caused by EXT0"); break;
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_EXT1: Serial.println("Wakeup caused by EXT1"); break;
+	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_UNDEFINED:
+	default: {
+		gfx.eraseDisplay(true);
+		gfx.eraseDisplay();
+		Serial.println("Wake from RESET or other");
+		//prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
+		memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);
+		return WakeReason::HardReset;
+	}
+	}
+}

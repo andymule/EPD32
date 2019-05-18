@@ -5,7 +5,7 @@
 
 TaskHandle_t* WiFiTask;
 
-void StartWiFi(void *loopForever) {
+void StartWiFi(void *args) {
 	int connAttempts = 0;
 	WiFi.mode(WIFI_STA);
 	WiFi.begin(savedSettings.wifi_ssid.c_str(), savedSettings.wifi_password.c_str());
@@ -14,37 +14,28 @@ void StartWiFi(void *loopForever) {
 		if (connAttempts > WIFI_TIMEOUT_MS / WIFI_DELAY_CHECK_TIME_MS) {
 			prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
 			DrawFailedToConnectToWiFi();
-			Sleep();
+			DeepSleep();
 		}
 		connAttempts++;
 	}
-	Serial.println("WIFI IS UP");
-	while (loopForever)
-		delay(1000);
+	vTaskDelete(NULL); // deletes self
 }
 
 void StopWiFi() {
-	//WiFi.disconnect(true);
 	WiFi.mode(WIFI_OFF);
 }
 
 void EnsureWiFiIsStarted()
 {
-	bool deleteTask = false;
 	int counter = 0;
 	while (!WiFi.isConnected())
 	{
-		deleteTask = true;
-		//if (counter % 10 == 0)
-		//{
-		//	counter = 0;
-		//	//Serial.println(".");
-		//}
-		//counter++;
+		if (counter % 10 == 0)
+		{
+			counter = 0;
+			Serial.println(".");
+		}
+		counter++;
 		delay(10);
-	}
-	if (deleteTask) {
-		vTaskDelete(WiFiTask);
-		//Serial.println();
 	}
 }

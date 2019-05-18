@@ -74,6 +74,26 @@ void DrawDaysAhead(int daysAhead)
 	}
 }
 
+void DrawCenteredString(int fontsize, int y_pos, String s, int nudge) // requires color set beforehand
+{
+	switch (fontsize)
+	{
+	case 9:
+		gfx.setFont(font9);
+		break;
+	case 12:
+		gfx.setFont(font12);
+		break;
+	default:
+		fontsize = 8;
+		gfx.setFont();
+		break;
+	}
+	int setback = HalfWidthOfText(s, fontsize);
+	gfx.setCursor(gfx.width() / 2 - setback + nudge, y_pos);
+	gfx.println(s);
+}
+
 void DrawDisplay()
 {
 	int setback = 0;
@@ -91,7 +111,6 @@ void DrawDisplay()
 	//gfx.setFont(font12);
 	//gfx.setCursor(gfx.width() / 2 - 16, 30);
 	//gfx.println(WeatherDays[0].DayOfWeek);
-
 	gfx.setFont(font12);
 	setback = HalfWidthOfText(String(WeatherDays[0].Low), 12);
 	gfx.setCursor(gfx.width() / 4 - setback, 35);
@@ -103,28 +122,11 @@ void DrawDisplay()
 	//gfx.print("High:");
 	gfx.print(WeatherDays[0].High);
 	//gfx.println(String("°"));	// TODO andymule draw degrees // TODO turn centering boilerplate into method
-
-	gfx.setFont(font9);
-	setback = HalfWidthOfText(TodayTempDesc, 9);
-	gfx.setCursor(gfx.width() / 2 - setback, 53);
-	gfx.println(TodayTempDesc);
-
-	setback = HalfWidthOfText(TodaySky, 9);
-	gfx.setCursor(gfx.width() / 2 - setback, 73);
-	gfx.println(TodaySky);
-
-	gfx.setFont(font9);
-	setback = HalfWidthOfText(String(CurrentTemp), 9);
-	gfx.setCursor(gfx.width() / 2 - setback, 20 + 9);
-	gfx.println(CurrentTemp);
-
-	//addsun(gfx.width() / 2, 17, 7);	// TODO andymule use bitmap prolly
-
+	DrawCenteredString(9, 53, TodayTempDesc, 5);
+	DrawCenteredString(9, 73, TodaySky, 5);
+	DrawCenteredString(9, 20, String(CurrentTemp), 0);
 	DrawDaysAhead(6);
-
 	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	//gfx.update();
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, true);
 }
 
 void DrawConnectionInstructions()
@@ -137,7 +139,6 @@ void DrawConnectionInstructions()
 	gfx.println();
 	gfx.println("Configure and enjoy!");
 	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	//gfx.update();
 }
 
 void DrawFailedToConnectToSite()
@@ -148,7 +149,6 @@ void DrawFailedToConnectToSite()
 	gfx.println("Failed to connect to sites.");
 	gfx.println("Check your internet connection.");
 	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	//gfx.update();
 }
 
 void DrawFailedToConnectToWiFi()
@@ -159,19 +159,18 @@ void DrawFailedToConnectToWiFi()
 	gfx.println("Failed to connect to WiFi.");
 	gfx.println("Check your router or Atmo settings.");
 	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	//gfx.update();
 }
 
 void DrawUpdating()
 {
-	int setback = 0;
-	gfx.setFont(font9);
 	gfx.setTextColor(GxEPD_BLACK);
-	setback = HalfWidthOfText("updating", 9);
-	gfx.setCursor(gfx.width() / 2 - setback, 20 + 9);
-	gfx.println("updating");
-	gfx.updateWindow(gfx.width() / 2 - setback, 20 - 5, setback * 2, 9, true);
-	gfx.fillRect(gfx.width() / 2 - setback, 20 - 3 - 5, setback * 2 + 3, 9 * 2, GxEPD_WHITE);	// cover it up though
+	int fontsize = 9;
+	int startpoint = 20;
+	DrawCenteredString(fontsize, startpoint, "updating", 0);
+	int setback = HalfWidthOfText("updating", fontsize);
+	//gfx.fillRect(gfx.width() / 2 - setback, startpoint - 15, setback * 2 + 3, 9 + 4 * 2, GxEPD_BLACK);	// cover it up though
+	gfx.updateWindow(gfx.width() / 2 - setback, startpoint - 5, setback * 2, 9+4, true);
+	gfx.fillRect(gfx.width() / 2 - setback, startpoint - 15, setback * 2 + 3, 9 +15, GxEPD_WHITE);	// cover it up though
 }
 
 void addcloud(int x, int y, int scale, int linesize) {

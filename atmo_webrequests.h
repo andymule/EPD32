@@ -1,4 +1,53 @@
 #pragma once
+void GetGeolocationFromNet();
+void ParseWeatherAndTime();
+void ParseGeoLocation();
+
+HTTPClient weathercurrenthttp, geolocatehttp;
+// original strings:
+// http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=59.3307&lon=18.0718&units=metric
+//https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&latitude=59.3307&longitude=18.0718
+
+//const String weatherCurrent = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
+const String weatherCurrent = "https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&product=observation&oneobservation=true&latitude=";
+const String weatherAndLon = "&longitude=";
+const String weatherNoMetric = "&metric=false";	// todo is this autoresolved by here api?
+const String weatherLanguage = "&language=";	// https://developer.here.com/documentation/weather/topics/supported-languages.html
+
+const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8"; //key=ab925796fd105310f825bbdceece059e
+
+void GetGeolocationFromNet()
+{
+	Serial.println("getting geolocation from internet");
+	geolocatehttp.setTimeout(SITE_TIMEOUT_MS);
+	EnsureWiFiIsStarted();
+	geolocatehttp.begin(geolocatestring);
+	int geoHttpCode = geolocatehttp.GET();
+	if (geoHttpCode == 200)
+	{
+		ParseGeoLocation();
+		//geolocatehttp.end(); 
+		// we dont end the geolocatehttp to save time TODO does this actually save time?
+	}
+	else if (geoHttpCode != 200) { // FAILED TO CONNECT TO GEOLOCATE SITE
+		DrawFailedToConnectToSite();	// draws to epaper
+		DeepSleep();
+	}
+}
+
+int RequestWeatherData()
+{
+	String weatherCall = weatherCurrent + savedSettings.lat + weatherAndLon + savedSettings.lon;
+	if (NO_METRIC)
+	{
+		weatherCall = weatherCall + weatherNoMetric;
+	}
+	weathercurrenthttp.setTimeout(SITE_TIMEOUT_MS);
+	EnsureWiFiIsStarted();
+	weathercurrenthttp.begin(weatherCall); //Specify the URL
+	return weathercurrenthttp.GET();
+}
+
 
 
 void ParseCurrentTimeForDisplay(int timezone)
@@ -44,15 +93,15 @@ void SetClockAndDriftCompensate() // TODO put on second core?
 }
 
 
-void ParseWeatherAndTime(String currentWeatherString)
+void ParseWeatherAndTime()
 {
 	DynamicJsonDocument weatherCurrentDoc(12000);
-	DeserializationError error = deserializeJson(weatherCurrentDoc, currentWeatherString); //optimize doc size
+	DeserializationError error = deserializeJson(weatherCurrentDoc, weathercurrenthttp.getString()); //optimize doc size
 
 	if (error) {
 		Serial.print(F("deserializeJson() failed22: "));
 		Serial.println(error.c_str());
-		Sleep();
+		DeepSleep();
 	}
 	String ObservationTime = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["utcTime"].as<String>();
 	int timezonestartI = ObservationTime.lastIndexOf('+');
@@ -76,11 +125,13 @@ void ParseWeatherAndTime(String currentWeatherString)
 	TodayLow = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["lowTemperature"];
 	TodaySky = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["skyDescription"].as<String>();
 	TodayTempDesc = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperatureDesc"].as<String>();
+	//TodayTempDesc.toLowerCase();
+	//TodaySky.toLowerCase();
 	CurrentTemp = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperature"];
 }
 
 
-void ParseGeoLocation(String geoString)
+void ParseGeoLocation()
 {
 	// Enough space for:
 			// + 1 object with 3 members
@@ -90,11 +141,11 @@ void ParseGeoLocation(String geoString)
 			// TODO look into this for making exactly sized JSON docs
 			//"Of course, if the JsonDocument were bigger, it would make sense to move it the heap" (<- from PDF)
 	DynamicJsonDocument geoDoc(900);
-	DeserializationError error = deserializeJson(geoDoc, geoString);  //optimize doc size
+	DeserializationError error = deserializeJson(geoDoc, geolocatehttp.getString());  //optimize doc size
 	if (error) {
 		Serial.print(F("deserializeJson() failed 1 : "));
 		Serial.println(error.c_str());
-		Sleep();
+		DeepSleep();
 	}
 	String city = geoDoc["city"].as<String>();
 	city.replace(" ", "%20");
