@@ -70,7 +70,7 @@ void EnableTouchpadWake()
 	//(uint32_t)esp_sleep_get_touchpad_wakeup_status();
 }
 
-void DeepSleep()
+void AtmoDeepSleep()
 {
 	// TODO blog says: It’s worth setting all pins to inputs before sleep, to ensure there are no active GPIO pull downs consuming power. 
 	gfx.powerDown();	// saves power but is it worth the time? is this better to NOT do?

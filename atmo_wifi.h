@@ -14,7 +14,7 @@ void StartWiFi(void *args) {
 		if (connAttempts > WIFI_TIMEOUT_MS / WIFI_DELAY_CHECK_TIME_MS) {
 			prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
 			DrawFailedToConnectToWiFi();
-			DeepSleep();
+			AtmoDeepSleep();
 		}
 		connAttempts++;
 	}

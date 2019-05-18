@@ -4,13 +4,13 @@
 // TODO remove FREERTOS thing and try swapping cores, does it save time?
 // TODO detect wrong password? explicitly 
 // TODO have way to update firmware?
+// TODO verify webpage input e.g. empty wifi name
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <gfxfont.h>
 /* include any other fonts you want to use https://github.com/adafruit/Adafruit-GFX-Library */
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
-//#include <Fonts/FreeMonoBold9pt7b.h>
 //#include <Fonts/FreeMonoBold12pt7b.h>
 // TODO make your own fonts here: http://oleddisplay.squix.ch/
 //#include "Icon2.h"
@@ -23,15 +23,10 @@
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <WiFiAP.h>
-//#include <WiFiServer.h>
-//#include <ESP8266WebServer.h>
 #include <FS.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
-//#include <ESPAsyncWebServer.h>
-//#include <AsyncTCP.h>
-//#include <HTTP_Method.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include "esp32/ulp.h"
@@ -50,18 +45,9 @@
 #include "atmo_webserver.h"
 #include "atmo_webrequests.h"
 
-
-//#if CONFIG_FREERTOS_UNICORE
-//#define ARDUINO_RUNNING_CORE 0
-//#define BACKGROUND_CORE 0
-//#else
-//#define ARDUINO_RUNNING_CORE 1
-//#define BACKGROUND_CORE 0
-//#endif
-
 #define MAIN_CORE 1
 #define BACKGROUND_CORE 0
-
+#include "Icon2.h"
 int wifisection, displaysection;
 unsigned long lastConnectionTime = 0;          // Last time you connected to the server, in milliseconds
 
@@ -70,7 +56,6 @@ unsigned long lastConnectionTime = 0;          // Last time you connected to the
 // TODO andymule FOR RELEASE BUILD Disabling all logging and holding the UART disable pin high only increases boot time by around 20 ms?
 void setup() {
 	wifisection = millis();
-
 	//struct timeval wakeTime;
 	//gettimeofday(&wakeTime, NULL);
 	//int sleep_time_ms = (wakeTime.tv_sec - sleep_enter_time.tv_sec) * 1000 + (wakeTime.tv_usec - sleep_enter_time.tv_usec) / 1000;
@@ -84,6 +69,10 @@ void setup() {
 	gfx.init();
 	gfx.setRotation(3);
 	prefs.begin("settings");
+
+	//gfx.drawPicture(Icon1, sizeof(Icon1));
+	//gfx.drawBitmap(gImage_Icon2, sizeof(gImage_Icon2), gfx.bm_default);
+	//AtmoDeepSleep();
 
 	WakeReason reason = CheckResetReason();
 
@@ -118,7 +107,7 @@ void setup() {
 	}
 	else if (weatherHttpCode != 200) {
 		DrawFailedToConnectToSite();
-		DeepSleep();
+		AtmoDeepSleep();
 	}
 	wifisection = millis() - wifisection;
 	displaysection = millis();
@@ -128,5 +117,5 @@ void setup() {
 	displaysection = millis() - displaysection;
 	Serial.println("Wifi took:	 " + String(wifisection / 1000.0) + " secs");
 	Serial.println("Display took:" + String(displaysection / 1000.0) + " secs");
-	DeepSleep();
+	AtmoDeepSleep();
 }

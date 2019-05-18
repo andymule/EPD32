@@ -3,7 +3,6 @@ String SendHTML();
 
 const char* selfhostedWifiName = "ATMO";
 
-
 const byte DNS_PORT = 53;
 DNSServer dnsServer;
 WebServer server(80);
@@ -69,23 +68,29 @@ void handle_OnConnect() {
 	//}
 	server.send(200, "text/html", SendHTML());
 }
-void webHandleDefault();
+
 void HostWebsiteForInit()
 {
 	WiFi.mode(WIFI_AP);
 	WiFi.softAP(selfhostedWifiName);
 	delay(50);
-	IPAddress iip(1, 1, 1, 1);
-	IPAddress igateway(1, 1, 1, 1);
-	IPAddress isubnet(255, 255, 255, 0);
-	WiFi.softAPConfig(iip, igateway, isubnet);
+	IPAddress iip(8, 8, 8, 8);
+	//IPAddress igateway(8, 8, 8, 8);
+	IPAddress isubnet(255, 0, 0, 0);
+	WiFi.softAPConfig(iip, iip, isubnet);
 	dnsServer.start(DNS_PORT, "*", iip);
+	/*dnsServer.start(DNS_PORT, "www.at.mo", iip);
+	dnsServer.start(DNS_PORT, "at.mo", iip);
+	dnsServer.start(DNS_PORT, "at.mo/", iip);
+	dnsServer.start(DNS_PORT, "at/mo", iip);
+	dnsServer.start(DNS_PORT, "atmo/", iip);*/
 
 	// TODO detect first connection, always route to init connect instead of exit ?
 	const String root = "/";
 	//auto glambda = [](auto a, auto&& b) { return a < b; };
 	//server.onNotFound(webHandleDefault);
 	server.on("/", handle_OnConnect);	// this parses an error in intellisense but is totally fine
+	//server.on("at/mo", handle_OnConnect);	// this parses an error in intellisense but is totally fine
 
 	randomExitHandle = RandomHandle();
 	server.on("/" + randomExitHandle, handle_ExitSetup);	// this parses an error in intellisense but is totally fine
@@ -158,8 +163,6 @@ String SendHTML() {
 void loop() {
 	//pp("doin it!");
 	dnsServer.processNextRequest();
-	delay(1);
 	server.handleClient();
-	delay(200);
 	//TODO if press pad again, go back to normal operation
 }

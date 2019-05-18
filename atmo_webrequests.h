@@ -31,7 +31,7 @@ void GetGeolocationFromNet()
 	}
 	else if (geoHttpCode != 200) { // FAILED TO CONNECT TO GEOLOCATE SITE
 		DrawFailedToConnectToSite();	// draws to epaper
-		DeepSleep();
+		AtmoDeepSleep();
 	}
 }
 
@@ -101,7 +101,7 @@ void ParseWeatherAndTime()
 	if (error) {
 		Serial.print(F("deserializeJson() failed22: "));
 		Serial.println(error.c_str());
-		DeepSleep();
+		AtmoDeepSleep();
 	}
 	String ObservationTime = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["utcTime"].as<String>();
 	int timezonestartI = ObservationTime.lastIndexOf('+');
@@ -145,7 +145,7 @@ void ParseGeoLocation()
 	if (error) {
 		Serial.print(F("deserializeJson() failed 1 : "));
 		Serial.println(error.c_str());
-		DeepSleep();
+		AtmoDeepSleep();
 	}
 	String city = geoDoc["city"].as<String>();
 	city.replace(" ", "%20");
