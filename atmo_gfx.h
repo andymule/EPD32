@@ -1,13 +1,14 @@
 #pragma once
 
-GxIO_Class io(SPI, /*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16);	// arbitrary selection of 17, 16
-GxEPD_Class gfx(io, /*RST=*/ 16, /*BUSY=*/ 4);				 // arbitrary selection of (16), 4
+GxEPD2_BW<GxEPD2_290, GxEPD2_290::HEIGHT> gfx(GxEPD2_290(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4));
+//GxIO_Class io(SPI, /*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16);	// arbitrary selection of 17, 16
+//GxEPD_Class gfx(io, /*RST=*/ 16, /*BUSY=*/ 4);				 // arbitrary selection of (16), 4
 const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
 const GFXfont* font12 = &FreeSans12pt7b;
 
 // useful tools, like bitmap converter, fonts, and font converters
 // https://github.com/cesanta/arduino-drivers/tree/master/Adafruit-GFX-Library
-//#include GxEPD_BitmapExamples
+// showFont("FreeMonoBold9pt7b", &FreeMonoBold9pt7b); // draws all chars
 
 //const int width = 296;
 //const int height = 128;
@@ -30,6 +31,38 @@ const GFXfont* font12 = &FreeSans12pt7b;
 //	}
 //}
 ////#########################################################################################
+
+void DrawLines()
+{
+	uint16_t box_x = 10;
+	uint16_t box_y = 15;
+	uint16_t box_w = 70;
+	uint16_t box_h = 20;
+	uint16_t cursor_y = box_y + box_h - 6;
+	//display.getTextBounds(
+	gfx.firstPage();
+	gfx.setFont(&FreeSans9pt7b);
+	gfx.setTextColor(GxEPD_BLACK);
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	gfx.fillScreen(GxEPD_WHITE);
+	gfx.nextPage();
+	while (true)
+	{
+		gfx.fillScreen(GxEPD_WHITE);
+		for (int i = 0; i < gfx.height(); i+=10)
+		{
+			//gfx.fillRect(box_x, box_y, box_w, box_h, GxEPD_WHITE);
+			gfx.drawPixel(box_x+i, box_y+i, GxEPD_BLACK);
+			gfx.setPartialWindow(box_x+i-5, box_y+i-5, 10, gfx.height());
+			//gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
+			//gfx.drawLine(box_x, box_y, box_x + box_w, box_y + box_h, GxEPD_BLACK);
+			//gfx.drawLine(box_x, box_y, box_x+box_w, box_y+box_h, GxEPD_BLACK);
+			//gfx.drawFastHLine(5, 5, 5, GxEPD_BLACK);
+			//gfx.updateWindow(box_x, box_y, box_w, box_h, true);
+			gfx.nextPage();
+		}
+	}
+}
 
 int HalfWidthOfText(String text, int size)
 {
@@ -94,7 +127,7 @@ void DrawCenteredString(int fontsize, int y_pos, String s, int nudge) // require
 	gfx.println(s);
 }
 
-void DrawDisplay()
+void DrawWeather()
 {
 	int setback = 0;
 	gfx.setTextColor(GxEPD_BLACK);
@@ -122,11 +155,12 @@ void DrawDisplay()
 	//gfx.print("High:");
 	gfx.print(WeatherDays[0].High);
 	//gfx.println(String("°"));	// TODO andymule draw degrees // TODO turn centering boilerplate into method
-	DrawCenteredString(9, 53, TodayTempDesc, 5);
-	DrawCenteredString(9, 73, TodaySky, 5);
+	DrawCenteredString(9, 53, TodayTempDesc, 0);
+	DrawCenteredString(9, 73, TodaySky, 0);
 	DrawCenteredString(9, 20, String(CurrentTemp), 0);
 	DrawDaysAhead(6);
-	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	gfx.nextPage();
 }
 
 void DrawConnectionInstructions()
@@ -138,7 +172,9 @@ void DrawConnectionInstructions()
 	gfx.println("Then, browse to at.mo");
 	gfx.println();
 	gfx.println("Configure and enjoy!");
-	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	//gfx.update
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	gfx.nextPage();
 }
 
 void DrawFailedToConnectToSite()
@@ -148,7 +184,8 @@ void DrawFailedToConnectToSite()
 	gfx.setCursor(0, 60 + 9);
 	gfx.println("Failed to connect to sites.");
 	gfx.println("Check your internet connection.");
-	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	gfx.nextPage();
 }
 
 void DrawFailedToConnectToWiFi()
@@ -158,7 +195,8 @@ void DrawFailedToConnectToWiFi()
 	gfx.setCursor(0, 30 + 9);
 	gfx.println("Failed to connect to WiFi.");
 	gfx.println("Check your router or Atmo settings.");
-	gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+	gfx.nextPage();
 }
 
 void DrawUpdating()
@@ -169,7 +207,8 @@ void DrawUpdating()
 	DrawCenteredString(fontsize, startpoint, "updating", 0);
 	int setback = HalfWidthOfText("updating", fontsize);
 	//gfx.fillRect(gfx.width() / 2 - setback, startpoint - 15, setback * 2 + 3, 9 + 4 * 2, GxEPD_BLACK);	// cover it up though
-	gfx.updateWindow(gfx.width() / 2 - setback, startpoint - 5, setback * 2, 9+4, true);
+	//gfx.updateWindow(gfx.width() / 2 - setback, startpoint - 5, setback * 2, 9+4, true);
+	gfx.nextPage();
 	gfx.fillRect(gfx.width() / 2 - setback, startpoint - 15, setback * 2 + 3, 9 +15, GxEPD_WHITE);	// cover it up though
 }
 

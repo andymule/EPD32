@@ -14,10 +14,12 @@
 //#include <Fonts/FreeMonoBold12pt7b.h>
 // TODO make your own fonts here: http://oleddisplay.squix.ch/
 //#include "Icon2.h"
-#include <GxEPD.h>
-#include <GxGDEH029A1/GxGDEH029A1.h>
-#include <GxIO/GxIO.h>
-#include <GxIO/GxIO_SPI/GxIO_SPI.h>
+#define ESP32
+#include <GxEPD2_BW.h>
+//#include <GxEPD.h>
+//#include <GxGDEH029A1/GxGDEH029A1.h>
+//#include <GxIO/GxIO.h>
+//#include <GxIO/GxIO_SPI/GxIO_SPI.h>
 
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -66,10 +68,15 @@ void setup() {
 	//Serial.print(sleep_time_ms);
 	//Serial.println(" ms");
 
+	pp(gfx.width());
+	pp(gfx.height());
 	gfx.init();
 	gfx.setRotation(3);
+	pp(gfx.width());
+	pp(gfx.height());
 	prefs.begin("settings");
-
+	//DrawLines();
+	//AtmoDeepSleep();
 	//gfx.drawPicture(Icon1, sizeof(Icon1));
 	//gfx.drawBitmap(gImage_Icon2, sizeof(gImage_Icon2), gfx.bm_default);
 	//AtmoDeepSleep();
@@ -112,7 +119,7 @@ void setup() {
 	wifisection = millis() - wifisection;
 	displaysection = millis();
 	if (weatherHttpCode == 200) {
-		DrawDisplay();
+		DrawWeather();
 	}
 	displaysection = millis() - displaysection;
 	Serial.println("Wifi took:	 " + String(wifisection / 1000.0) + " secs");

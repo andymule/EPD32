@@ -32,7 +32,8 @@ void handle_ExitSetup()
 	}
 	//Serial.println(server.argName(i) + ":" + server.arg(i));
 	//gfx.eraseDisplay();
-	gfx.eraseDisplay(true);
+	//gfx.eraseDisplay(true);
+	gfx.fillScreen(GxEPD_WHITE);
 	prefs.putBool("valid", true); //invalidate location data // TODO indicate this on display
 	String ptr = "<!DOCTYPE html> <html>\n";
 	ptr += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
