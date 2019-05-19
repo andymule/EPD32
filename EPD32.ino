@@ -5,6 +5,7 @@
 // TODO detect wrong password? explicitly 
 // TODO have way to update firmware?
 // TODO verify webpage input e.g. empty wifi name
+// TODO ULP bitbang drive SPI to update screen in ULP???
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <gfxfont.h>
