@@ -160,7 +160,7 @@ void DrawWeather()
 	DrawCenteredString(9, 20, String(CurrentTemp), 0);
 	DrawDaysAhead(6);
 	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.nextPage();
+	gfx.nextPage();// TODO partial update
 }
 
 void DrawConnectionInstructions()
@@ -174,7 +174,7 @@ void DrawConnectionInstructions()
 	gfx.println("Configure and enjoy!");
 	//gfx.update
 	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.nextPage();
+	gfx.nextPage();// TODO partial update
 }
 
 void DrawFailedToConnectToSite()
@@ -185,7 +185,7 @@ void DrawFailedToConnectToSite()
 	gfx.println("Failed to connect to sites.");
 	gfx.println("Check your internet connection.");
 	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.nextPage();
+	gfx.nextPage();// TODO partial update
 }
 
 void DrawFailedToConnectToWiFi()
@@ -196,7 +196,7 @@ void DrawFailedToConnectToWiFi()
 	gfx.println("Failed to connect to WiFi.");
 	gfx.println("Check your router or Atmo settings.");
 	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.nextPage();
+	gfx.nextPage();// TODO partial update
 }
 
 void DrawUpdating()
@@ -208,7 +208,7 @@ void DrawUpdating()
 	int setback = HalfWidthOfText("updating", fontsize);
 	//gfx.fillRect(gfx.width() / 2 - setback, startpoint - 15, setback * 2 + 3, 9 + 4 * 2, GxEPD_BLACK);	// cover it up though
 	//gfx.updateWindow(gfx.width() / 2 - setback, startpoint - 5, setback * 2, 9+4, true);
-	gfx.nextPage();
+	gfx.nextPage();	// TODO partial update
 	gfx.fillRect(gfx.width() / 2 - setback, startpoint - 15, setback * 2 + 3, 9 +15, GxEPD_WHITE);	// cover it up though
 }
 

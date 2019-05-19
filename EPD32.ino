@@ -68,13 +68,11 @@ void setup() {
 	//Serial.print(sleep_time_ms);
 	//Serial.println(" ms");
 
-	pp(gfx.width());
-	pp(gfx.height());
 	gfx.init();
 	gfx.setRotation(3);
-	pp(gfx.width());
-	pp(gfx.height());
 	prefs.begin("settings");
+	gfx.firstPage();
+	gfx.fillScreen(GxEPD_WHITE);
 	//DrawLines();
 	//AtmoDeepSleep();
 	//gfx.drawPicture(Icon1, sizeof(Icon1));
