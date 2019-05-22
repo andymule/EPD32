@@ -1,23 +1,13 @@
 #pragma once
 
-class SavedSettings
-{
-public:
-	bool valid;
-	String city;
-	float lat;
-	float lon;
-	String wifi_ssid;
-	String wifi_password;
-};
 Preferences prefs;	// used to save and load from memory
-SavedSettings savedSettings; // loads from memory into RAM, used for refernce afterward
 
 class WeatherDay
 {
 public:
 	int High;
 	int Low;
+	int PrecipChance;
 	const char* SkyText;
 	const char* PrecipText;
 	//const char* UTCTime;
@@ -32,17 +22,14 @@ String TodayTempDesc;
 int TodayHigh;
 int TodayLow;
 
-
-void ReloadSavedSettings()
-{
-	savedSettings.lat = prefs.getFloat("lat");
-	savedSettings.lon = prefs.getFloat("lon");
-	savedSettings.city = prefs.getString("city");
-	savedSettings.wifi_password = prefs.getString("wifi_password");
-	savedSettings.wifi_ssid = prefs.getString("wifi_ssid");
-}
-
-
+// a dumb sort of enum kinda
+#define PREF_VALID_BOOL "valid"
+#define PREF_LAT_FLOAT "lat"
+#define PREF_LON_FLOAT "lon"
+#define PREF_CITY_STRING "city"
+#define PREF_METRIC_BOOL "useMetric"
+#define PREF_PASSWORD_STRING "wifi_password"
+#define PREF_SSID_STRING "wifi_ssid"
 
 /*
 https://developer.here.com/documentation/weather/topics/resource-type-weather-items.html

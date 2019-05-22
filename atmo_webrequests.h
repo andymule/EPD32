@@ -11,14 +11,15 @@ HTTPClient weathercurrenthttp, geolocatehttp;
 //const String weatherCurrent = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
 const String weatherCurrent = "https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&product=observation&oneobservation=true&latitude=";
 const String weatherAndLon = "&longitude=";
-const String weatherNoMetric = "&metric=false";	// todo is this autoresolved by here api?
+const String weatherNoMetric = "&metric=false";	
+const String weatherMetric = "&metric=true";	
 const String weatherLanguage = "&language=";	// https://developer.here.com/documentation/weather/topics/supported-languages.html
 
 const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8"; //key=ab925796fd105310f825bbdceece059e
 
 void GetGeolocationFromNet()
 {
-	Serial.println("getting geolocation from internet");
+	pp("getting geolocation from internet");
 	geolocatehttp.setTimeout(SITE_TIMEOUT_MS);
 	EnsureWiFiIsStarted();
 	geolocatehttp.begin(geolocatestring);
@@ -26,8 +27,6 @@ void GetGeolocationFromNet()
 	if (geoHttpCode == 200)
 	{
 		ParseGeoLocation();
-		//geolocatehttp.end(); 
-		// we dont end the geolocatehttp to save time TODO does this actually save time?
 	}
 	else if (geoHttpCode != 200) { // FAILED TO CONNECT TO GEOLOCATE SITE
 		DrawFailedToConnectToSite();	// draws to epaper
@@ -37,8 +36,12 @@ void GetGeolocationFromNet()
 
 int RequestWeatherData()
 {
-	String weatherCall = weatherCurrent + savedSettings.lat + weatherAndLon + savedSettings.lon;
-	if (NO_METRIC)
+	String weatherCall = weatherCurrent + prefs.getFloat(PREF_LAT_FLOAT) + weatherAndLon + prefs.getFloat(PREF_LON_FLOAT);
+	if (prefs.getBool(PREF_METRIC_BOOL))
+	{
+		weatherCall = weatherCall + weatherMetric;
+	}
+	else
 	{
 		weatherCall = weatherCall + weatherNoMetric;
 	}
@@ -81,8 +84,6 @@ void SetClockAndDriftCompensate() // TODO put on second core?
 	time_t oldTime = now();
 	time_t newTime = makeTime(tm);
 	setTime(newTime);
-	//pp(oldTime);
-	//pp(newTime);
 	int64_t timeDriftSeconds = newTime - oldTime; // negative if i woke up early, bc oldtime was too fast
 	SleepDriftWasTooFast = (timeDriftSeconds < 0);
 	if (SleepDriftWasTooFast)
@@ -117,6 +118,7 @@ void ParseWeatherAndTime()
 		WeatherDays[i].DayOfWeek = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["weekday"].as<char*>();
 		WeatherDays[i].High = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["highTemperature"];
 		WeatherDays[i].Low = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["lowTemperature"];
+		WeatherDays[i].PrecipChance = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["precipitationProbability"];
 		WeatherDays[i].SkyText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["skyDescription"];
 		WeatherDays[i].PrecipText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["precipitationDesc"];
 	}
@@ -149,11 +151,8 @@ void ParseGeoLocation()
 	}
 	String city = geoDoc["city"].as<String>();
 	city.replace(" ", "%20");
-	savedSettings.lat = geoDoc["latitude"];
-	savedSettings.lon = geoDoc["longitude"];
-	savedSettings.city = const_cast<char*>(city.c_str());
-	prefs.putBool("valid", true);
-	prefs.putFloat("lat", savedSettings.lat);
-	prefs.putFloat("lon", savedSettings.lon);
-	prefs.putString("city", city);
+	prefs.putBool(PREF_VALID_BOOL, true);
+	prefs.putFloat(PREF_LAT_FLOAT, geoDoc["latitude"]);
+	prefs.putFloat(PREF_LON_FLOAT, geoDoc["longitude"]);
+	prefs.putString(PREF_CITY_STRING, city);
 }

@@ -82,14 +82,15 @@ void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeigh
 	gfx.println(s);
 	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight);
 
-	String CheckText = String(WeatherDays[daysAfterToday].SkyText);
+	//String CheckText = String(WeatherDays[daysAfterToday].SkyText);
 	//String CheckText = String(WeatherDays[daysAfterToday].PrecipText);
-	String PrintText = String(CheckText);	// TODO smarter way to display just one word, need a real parser
-	if (CheckText.indexOf(" ") > 0)
-	{
-		PrintText = CheckText.substring(CheckText.lastIndexOf(" ") + 1, CheckText.length());
-	}
-	gfx.println(PrintText);
+	//String PrintText = String(CheckText);	// TODO smarter way to display just one word, need a real parser
+	//if (CheckText.indexOf(" ") > 0)
+	//{
+		//PrintText = CheckText.substring(CheckText.lastIndexOf(" ") + 1, CheckText.length());
+	//}
+	String PrecipChanceString = String(WeatherDays[daysAfterToday].PrecipChance);
+	gfx.println(PrecipChanceString + "%");
 
 	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight * 2);
 	gfx.println(WeatherDays[daysAfterToday].High);
@@ -132,7 +133,7 @@ void DrawWeather()
 	// city in top left
 	gfx.setFont();	// uses tiny default font
 	gfx.setCursor(0, 0);
-	gfx.print(savedSettings.city);
+	gfx.print(prefs.getString(PREF_CITY_STRING));
 
 	// time in top right
 	gfx.setCursor(gfx.width() - gfx.width() / 9 + 2, 0);

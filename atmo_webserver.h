@@ -1,13 +1,45 @@
 #pragma once
+// TODO auto captive portal on phone connect
 String SendHTML();
 
-const char* selfhostedWifiName = "ATMO";
-
+const char* selfhostedWifiName = "Atmo";
+String randomExitHandle = "";
 const byte DNS_PORT = 53;
 DNSServer dnsServer;
 WebServer server(80);
+const char *_atmoSetupURL = "at.mo";
 
-String randomExitHandle = "";
+boolean isIp(String str) {
+	for (int i = 0; i < str.length(); i++) {
+		int c = str.charAt(i);
+		if (c != '.' && (c < '0' || c > '9')) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/** IP to String? */
+String toStringIp(IPAddress ip) {
+	String res = "";
+	for (int i = 0; i < 3; i++) {
+		res += String((ip >> (8 * i)) & 0xFF) + ".";
+	}
+	res += String(((ip >> 8 * 3)) & 0xFF);
+	return res;
+}
+
+boolean captivePortal() {
+	if (!isIp(server.hostHeader()) && server.hostHeader() != (String(_atmoSetupURL) + ".local")) {
+		Serial.println("Request redirected to captive portal");
+		server.sendHeader("Location", String("http://") + toStringIp(server.client().localIP()), true);
+		server.send(302, "text/plain", ""); // Empty content inhibits Content-length header so we have to close the socket ourselves.
+		server.client().stop(); // Stop is needed because we sent no content length
+		return true;
+	}
+	return false;
+}
+
 String RandomHandle()
 {
 	randomSeed(analogRead(0));
@@ -15,26 +47,37 @@ String RandomHandle()
 	return String(rand);
 }
 
+//void handle_ExitSetup()
 void handle_ExitSetup()
 {
+	//if (captivePortal()) { // If captive portal redirect instead of displaying start page initially
+	//	return;
+	//}
 	Serial.println("EXIT SETUP!");
 	for (int i = 0; i < server.args(); i++) {
 		if (server.argName(i) == "n") // wifi name
 		{
-			savedSettings.wifi_ssid = server.arg(i);
-			prefs.putString("wifi_ssid", savedSettings.wifi_ssid);
+			prefs.putString(PREF_SSID_STRING, server.arg(i));
 		}
-		if (server.argName(i) == "p") // wifi name
+		if (server.argName(i) == "p") // wifi pass
 		{
-			savedSettings.wifi_password = server.arg(i);
-			prefs.putString("wifi_password", savedSettings.wifi_password);
+			prefs.putString(PREF_PASSWORD_STRING, server.arg(i));
+		}
+		if (server.argName(i) == "metric") 
+		{
+			if (server.arg(i) == "true")
+			{
+				prefs.putBool(PREF_METRIC_BOOL, true);
+			}
+			else
+			{
+				prefs.putBool(PREF_METRIC_BOOL, false);
+			}
 		}
 	}
-	//Serial.println(server.argName(i) + ":" + server.arg(i));
-	//gfx.eraseDisplay();
-	//gfx.eraseDisplay(true);
+
 	gfx.fillScreen(GxEPD_WHITE);
-	prefs.putBool("valid", true); //invalidate location data // TODO indicate this on display
+	prefs.putBool(PREF_VALID_BOOL, true);
 	String ptr = "<!DOCTYPE html> <html>\n";
 	ptr += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
 	ptr += "<title>Atmo Weather Friend</title>\n";
@@ -43,61 +86,52 @@ void handle_ExitSetup()
 	ptr += "</style>\n";
 	ptr += "</head>\n";
 	ptr += "<body>\n";
-	ptr += "<h1>Settings saved!!</h1> <br>";
+	ptr += "<br><br><br><br><br><br><h1>Settings saved!!</h1> <br>";
 	ptr += "<h3>Check your Atmo device to verify the connection.</h3>\n";
 	ptr += "</body>\n";
 	ptr += "</html>\n";
 	server.send(200, "text/html", ptr);
-	//delay(100);	// make sure we write
 	server.close();
 	delay(100);	// make sure we write
-	esp_deep_sleep(1 * OneSecond);	// TODO is this best? prolly need to flag to avoid hard screen blanking
+	esp_deep_sleep(1 * OneSecond);	// TODO is this best? prolly need to flag to avoid hard screen blanking?
 }
 
-void handle_OnConnect() {
+void handle_OnConnect()
+{
+	if (captivePortal()) { // If captive portal redirect instead of displaying start page initially
+		return;
+	}
 	Serial.println("New Connection!");
-	//for (int i = 0; i < server.args(); i++) {
-	//	if (server.argName(i) == "n") // wifi name
-	//	{
-	//		savedSettings.wifi_ssid = server.arg(i);
-	//	}
-	//	if (server.argName(i) == "p") // wifi name
-	//	{
-	//		savedSettings.wifi_password = server.arg(i);
-	//	}
-	//	//Serial.println(server.argName(i) + ":" + server.arg(i));
-	//}
-	server.send(200, "text/html", SendHTML());
+	server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+	server.sendHeader("Pragma", "no-cache");
+	server.sendHeader("Expires", "-1");
+	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+	server.send(200, "text/html", ""); // Empty content inhibits Content-length header so we have to close the socket ourselves.
+	server.sendContent(SendHTML());
+	server.client().stop(); // Stop is needed because we sent no content length
 }
 
 void HostWebsiteForInit()
 {
-	WiFi.mode(WIFI_AP);
+	IPAddress iip(1, 2, 3, 4);
+	IPAddress isubnet(255, 255, 255, 0);
 	WiFi.softAP(selfhostedWifiName);
-	delay(50);
-	IPAddress iip(8, 8, 8, 8);
-	//IPAddress igateway(8, 8, 8, 8);
-	IPAddress isubnet(255, 0, 0, 0);
+	delay(200);
 	WiFi.softAPConfig(iip, iip, isubnet);
+	delay(200);
+
+	dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
 	dnsServer.start(DNS_PORT, "*", iip);
-	/*dnsServer.start(DNS_PORT, "www.at.mo", iip);
-	dnsServer.start(DNS_PORT, "at.mo", iip);
-	dnsServer.start(DNS_PORT, "at.mo/", iip);
-	dnsServer.start(DNS_PORT, "at/mo", iip);
-	dnsServer.start(DNS_PORT, "atmo/", iip);*/
+	server.onNotFound(handle_OnConnect);
 
-	// TODO detect first connection, always route to init connect instead of exit ?
-	const String root = "/";
-	//auto glambda = [](auto a, auto&& b) { return a < b; };
-	//server.onNotFound(webHandleDefault);
-	server.on("/", handle_OnConnect);	// this parses an error in intellisense but is totally fine
-	//server.on("at/mo", handle_OnConnect);	// this parses an error in intellisense but is totally fine
+	// all four of these might not be needed? does not found cover them all? IDK 
+	server.on("/", handle_OnConnect);
+	server.on("/generate_204", handle_OnConnect);
+	server.on("/fwlink", handle_OnConnect);
+	server.on("/redirect", handle_OnConnect);
 
-	randomExitHandle = RandomHandle();
+	randomExitHandle = RandomHandle();	// random number form so ppl dont accidently reload settings by using saved web address in browser
 	server.on("/" + randomExitHandle, handle_ExitSetup);	// this parses an error in intellisense but is totally fine
-
-	//server.on(", handle_OnConnect);
-	//DrawConnectionInstructions();
 
 	server.begin();
 
@@ -130,31 +164,24 @@ String SendHTML() {
 	ptr += randomExitHandle;
 	ptr += "\" method=GET>WiFi Network: <input type=text name=n value=\"";
 
-	ptr += prefs.getString("wifi_ssid");
+	ptr += prefs.getString(PREF_SSID_STRING);
 	ptr += "\"><br><br>";
 
 	ptr += "WiFi Password: <input type=text name=p value=\"";
-	ptr += prefs.getString("wifi_password");
-	ptr += "\"><br><input type=submit></form>";
+	ptr += prefs.getString(PREF_PASSWORD_STRING);
+	ptr += "\"><br><br>";
 
-	//ptr += "<br><br><a class=\"button button-off\" href=\"/exit\">OFF</a>\n";
-	//if (led1stat)
-	//{
-	//	
-	//}
-	//else
-	//{
-	//	ptr += "<p>LED1 Status: OFF</p><a class=\"button button-on\" href=\"/led1on\">ON</a>\n";
-	//}
+	ptr += "<input type=radio name=metric";
+	if (prefs.getBool(PREF_METRIC_BOOL))
+		ptr += " checked ";
+	ptr += " value = true > Metric<br>";
 
-	//if (led2stat)
-	//{
-	//	ptr += "<p>LED2 Status: ON</p><a class=\"button button-off\" href=\"/led2off\">OFF</a>\n";
-	//}
-	//else
-	//{
-	//	ptr += "<p>LED2 Status: OFF</p><a class=\"button button-on\" href=\"/led2on\">ON</a>\n";
-	//}
+	ptr += "<input type=radio name=metric";
+	if (!prefs.getBool(PREF_METRIC_BOOL))
+		ptr += " checked ";
+	ptr += " value = false > Imperial<br>";
+
+	ptr += "<br><br><input type=submit value=\"Save and Restart Atmo\"></form>";
 
 	ptr += "</body>\n";
 	ptr += "</html>\n";
@@ -162,8 +189,6 @@ String SendHTML() {
 }
 
 void loop() {
-	//pp("doin it!");
 	dnsServer.processNextRequest();
 	server.handleClient();
-	//TODO if press pad again, go back to normal operation
 }

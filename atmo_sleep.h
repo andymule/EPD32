@@ -73,8 +73,7 @@ void EnableTouchpadWake()
 void AtmoDeepSleep()
 {
 	// TODO blog says: It’s worth setting all pins to inputs before sleep, to ensure there are no active GPIO pull downs consuming power. 
-	//gfx.powerDown();	// saves power but is it worth the time? is this better to NOT do?
-	gfx.powerOff();
+	gfx.powerOff();	// need to call this or else "they" say screen gets damaged from constant voltage
 	EnableTouchpadWake();	// actually allows wake on pin touch???
 	uint64_t sleepTime = 0;
 	if (SleepDriftWasTooFast)
@@ -144,7 +143,7 @@ WakeReason CheckResetReason()
 	}
 	case esp_sleep_wakeup_cause_t::ESP_SLEEP_WAKEUP_TOUCHPAD:
 	{
-		prefs.putBool("valid", true); //invalidate location data // TODO indicate this on display
+		prefs.putBool(PREF_VALID_BOOL, true); //invalidate location data // TODO indicate this on display
 		Serial.println("Wakeup caused by touchpad");
 		int pad = get_wakeup_gpio_touchpad();
 		Serial.println("PAD:" + String(pad));
@@ -167,7 +166,7 @@ WakeReason CheckResetReason()
 		//gfx.eraseDisplay();
 		gfx.fillScreen(GxEPD_WHITE);
 		Serial.println("Wake from RESET or other");
-		//prefs.putBool("valid", false); //invalidate location data // TODO indicate this on display
+		//prefs.putBool(PREF_VALID_BOOL, false); //invalidate location data // TODO indicate this on display
 		memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);
 		return WakeReason::HardReset;
 	}

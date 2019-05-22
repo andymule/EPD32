@@ -1,11 +1,12 @@
 
-#define NO_METRIC 1	// toggle use of metric here for now TODO make this web option
 // TODO consider clock reset from pin, make sure timer makes sense (doesn't currently)
 // TODO remove FREERTOS thing and try swapping cores, does it save time?
 // TODO detect wrong password? explicitly 
 // TODO have way to update firmware?
 // TODO verify webpage input e.g. empty wifi name
 // TODO ULP bitbang drive SPI to update screen in ULP???
+// TODO display current detected location in webserver, allow custom location setting
+// TODO test on Open WiFi... test on very secure wifi?
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <gfxfont.h>
@@ -17,29 +18,29 @@
 //#include "Icon2.h"
 #define ESP32
 #include <GxEPD2_BW.h>
-//#include <GxEPD.h>
-//#include <GxGDEH029A1/GxGDEH029A1.h>
-//#include <GxIO/GxIO.h>
-//#include <GxIO/GxIO_SPI/GxIO_SPI.h>
 
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <WiFiAP.h>
+
 #include <FS.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
 #include <HTTPClient.h>
-#include <Preferences.h>
-#include "esp32/ulp.h"
+
 #define ARDUINOJSON_DECODE_UNICODE 1
 #include <ArduinoJson.h>
 
+#include <Preferences.h>
+#include "esp32/ulp.h"
 #include <time.h>
 #include <sys/time.h>
 #include <TimeLib.h>
 #include <rom/rtc.h>
+
+#define pp Serial.println
 
 #include "atmo_types.h"
 #include "atmo_gfx.h"
@@ -54,7 +55,6 @@
 int wifisection, displaysection;
 unsigned long lastConnectionTime = 0;          // Last time you connected to the server, in milliseconds
 
-#define pp Serial.println
 
 // TODO andymule FOR RELEASE BUILD Disabling all logging and holding the UART disable pin high only increases boot time by around 20 ms?
 void setup() {
@@ -81,27 +81,19 @@ void setup() {
 	//AtmoDeepSleep();
 
 	WakeReason reason = CheckResetReason();
-
-	savedSettings.valid = prefs.getBool("valid");
-	if (savedSettings.valid)
-	{
-		Serial.println("loaded saved lat and lon");
-		ReloadSavedSettings();
-	}
-
-	if (reason==WakeReason::EnterSettings || savedSettings.wifi_ssid == "")
+	if (reason==WakeReason::EnterSettings || prefs.getString(PREF_SSID_STRING) == "")
 	{
 		DrawConnectionInstructions();
 		HostWebsiteForInit();
-		return;
+		return;	// go straight to webserver setup loop, skip rest of init
 	}
 
 	xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 2048, 0, 1, WiFiTask, BACKGROUND_CORE); // start wifi on other core // TODO Move earlier but dont start if i host the server
 
 	DrawUpdating();
-
+	
 	lastConnectionTime = millis();
-	if (!savedSettings.valid)
+	if (!prefs.getBool(PREF_VALID_BOOL))	// if cache is invalidated, lets get our location again
 	{
 		GetGeolocationFromNet();
 	}
