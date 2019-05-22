@@ -74,6 +74,7 @@ void AtmoDeepSleep()
 {
 	// TODO blog says: It’s worth setting all pins to inputs before sleep, to ensure there are no active GPIO pull downs consuming power. 
 	gfx.powerOff();	// need to call this or else "they" say screen gets damaged from constant voltage
+	//gfx.hibernate(); // a better power off that lets us wake? idk if my board can do this, seems to glitch
 	EnableTouchpadWake();	// actually allows wake on pin touch???
 	uint64_t sleepTime = 0;
 	if (SleepDriftWasTooFast)
@@ -115,7 +116,7 @@ int get_wakeup_gpio_touchpad() {	// stole from internet. possible these aren't a
 	return -1;
 }
 
-WakeReason CheckResetReason()
+WakeReason CheckResetReasonAndClearScreenIfNeeded()
 {
 	uint64_t wakeupBit = esp_sleep_get_ext1_wakeup_status();
 	if (wakeupBit & GPIO_SEL_33) {
@@ -164,7 +165,15 @@ WakeReason CheckResetReason()
 	default: {
 		//gfx.eraseDisplay(true);
 		//gfx.eraseDisplay();
+		//gfx.setFullWindow();
+		gfx.setFullWindow();
 		gfx.fillScreen(GxEPD_WHITE);
+		//gfx.setCursor(x, y);
+		//gfx.print(HelloWorld);
+		gfx.display(false); // full update
+		//gfx.fillScreen(GxEPD_WHITE);
+		//gfx.nextPage();
+		//gfx.clearScreen();
 		Serial.println("Wake from RESET or other");
 		//prefs.putBool(PREF_VALID_BOOL, false); //invalidate location data // TODO indicate this on display
 		memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);

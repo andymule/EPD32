@@ -53,7 +53,7 @@ void handle_ExitSetup()
 	//if (captivePortal()) { // If captive portal redirect instead of displaying start page initially
 	//	return;
 	//}
-	Serial.println("EXIT SETUP!");
+	//Serial.println("EXIT SETUP!");
 	for (int i = 0; i < server.args(); i++) {
 		if (server.argName(i) == "n") // wifi name
 		{
@@ -125,10 +125,10 @@ void HostWebsiteForInit()
 	server.onNotFound(handle_OnConnect);
 
 	// all four of these might not be needed? does not found cover them all? IDK 
-	server.on("/", handle_OnConnect);
-	server.on("/generate_204", handle_OnConnect);
-	server.on("/fwlink", handle_OnConnect);
-	server.on("/redirect", handle_OnConnect);
+	//server.on("/", handle_OnConnect);
+	//server.on("/generate_204", handle_OnConnect);
+	//server.on("/fwlink", handle_OnConnect);
+	//server.on("/redirect", handle_OnConnect);
 
 	randomExitHandle = RandomHandle();	// random number form so ppl dont accidently reload settings by using saved web address in browser
 	server.on("/" + randomExitHandle, handle_ExitSetup);	// this parses an error in intellisense but is totally fine

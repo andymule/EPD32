@@ -7,6 +7,7 @@
 // TODO ULP bitbang drive SPI to update screen in ULP???
 // TODO display current detected location in webserver, allow custom location setting
 // TODO test on Open WiFi... test on very secure wifi?
+// TODO i wish GXEPD didn't clear buffer to black, can i swap?
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <gfxfont.h>
@@ -63,24 +64,26 @@ void setup() {
 	//gettimeofday(&wakeTime, NULL);
 	//int sleep_time_ms = (wakeTime.tv_sec - sleep_enter_time.tv_sec) * 1000 + (wakeTime.tv_usec - sleep_enter_time.tv_usec) / 1000;
 	Serial.begin(115200);
-	verbose_print_reset_reason(rtc_get_reset_reason(1));
+	//verbose_print_reset_reason(rtc_get_reset_reason(1));
 
 	//Serial.print("Time spent in deep sleep : ");
 	//Serial.print(sleep_time_ms);
 	//Serial.println(" ms");
 
 	gfx.init();
+	//gfx.clearScreen(
+	//gfx.refresh(
 	gfx.setRotation(3);
 	prefs.begin("settings");
-	gfx.firstPage();
-	gfx.fillScreen(GxEPD_WHITE);
+	//gfx.fillScreen(GxEPD_WHITE);
+	//gfx.firstPage();
 	//DrawLines();
 	//AtmoDeepSleep();
 	//gfx.drawPicture(Icon1, sizeof(Icon1));
 	//gfx.drawBitmap(gImage_Icon2, sizeof(gImage_Icon2), gfx.bm_default);
 	//AtmoDeepSleep();
-
-	WakeReason reason = CheckResetReason();
+	
+	WakeReason reason = CheckResetReasonAndClearScreenIfNeeded();
 	if (reason==WakeReason::EnterSettings || prefs.getString(PREF_SSID_STRING) == "")
 	{
 		DrawConnectionInstructions();
@@ -89,7 +92,8 @@ void setup() {
 	}
 
 	xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 2048, 0, 1, WiFiTask, BACKGROUND_CORE); // start wifi on other core // TODO Move earlier but dont start if i host the server
-
+	
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
 	DrawUpdating();
 	
 	lastConnectionTime = millis();

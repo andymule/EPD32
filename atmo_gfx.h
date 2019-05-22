@@ -1,5 +1,5 @@
 #pragma once
-
+// getTextBounds
 GxEPD2_BW<GxEPD2_290, GxEPD2_290::HEIGHT> gfx(GxEPD2_290(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4));
 const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
 const GFXfont* font12 = &FreeSans12pt7b;
@@ -30,7 +30,7 @@ const GFXfont* font12 = &FreeSans12pt7b;
 //}
 ////#########################################################################################
 
-void DrawLines()
+void DrawLines()	// drawing experiement to be resumed
 {
 	uint16_t box_x = 10;
 	uint16_t box_y = 15;
@@ -128,6 +128,8 @@ void DrawCenteredString(int fontsize, int y_pos, String s, int nudge) // require
 
 void DrawWeather()
 {
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
+	gfx.fillScreen(GxEPD_WHITE);
 	int setback = 0;
 	gfx.setTextColor(GxEPD_BLACK);
 	// city in top left
@@ -164,6 +166,8 @@ void DrawWeather()
 
 void DrawConnectionInstructions()
 {
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
+	gfx.fillScreen(GxEPD_WHITE);
 	gfx.setFont(font9);
 	gfx.setTextColor(GxEPD_BLACK);
 	gfx.setCursor(0, 19);
@@ -178,6 +182,8 @@ void DrawConnectionInstructions()
 
 void DrawFailedToConnectToSite()
 {
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
+	gfx.fillScreen(GxEPD_WHITE);
 	gfx.setFont(font9);
 	gfx.setTextColor(GxEPD_BLACK);
 	gfx.setCursor(0, 60 + 9);
@@ -189,6 +195,8 @@ void DrawFailedToConnectToSite()
 
 void DrawFailedToConnectToWiFi()
 {
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
+	gfx.fillScreen(GxEPD_WHITE);
 	gfx.setFont(font9);
 	gfx.setTextColor(GxEPD_BLACK);
 	gfx.setCursor(0, 30 + 9);
@@ -200,15 +208,21 @@ void DrawFailedToConnectToWiFi()
 
 void DrawUpdating()
 {
-	gfx.setTextColor(GxEPD_BLACK);
 	int fontsize = 9;
 	int startpoint = 20;
+	int setback = 36;
+	gfx.setPartialWindow(gfx.width() / 2 - setback - 15, startpoint - 15, setback * 2+15, 9 + 4);
+	gfx.fillScreen(GxEPD_WHITE);
+	gfx.setTextColor(GxEPD_BLACK);
 	DrawCenteredString(fontsize, startpoint, "updating", 0);
-	int setback = HalfWidthOfText("updating", fontsize);
+	setback = HalfWidthOfText("updating", fontsize);
 	//gfx.fillRect(gfx.width() / 2 - setback, startpoint - 15, setback * 2 + 3, 9 + 4 * 2, GxEPD_BLACK);	// cover it up though
 	//gfx.updateWindow(gfx.width() / 2 - setback, startpoint - 5, setback * 2, 9+4, true);
+	//pp("SETBACK");
+	//pp(setback);
+	//gfx.
 	gfx.nextPage();	// TODO partial update
-	gfx.fillRect(gfx.width() / 2 - setback, startpoint - 15, setback * 2 + 3, 9 +15, GxEPD_WHITE);	// cover it up though
+	gfx.fillRect(gfx.width() / 2 - setback-7, startpoint - 5, setback * 2 + 15, 9+4, GxEPD_WHITE);	// cover it up though
 }
 
 void addcloud(int x, int y, int scale, int linesize) {
