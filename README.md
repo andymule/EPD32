@@ -2,6 +2,8 @@
 
 Arduino Dependencies:
 
+https://github.com/espressif/arduino-esp32
+
 https://github.com/adafruit/Adafruit-GFX-Library
 
 https://github.com/ZinggJM/GxEPD2
