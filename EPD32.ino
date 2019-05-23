@@ -8,6 +8,7 @@
 // TODO display current detected location in webserver, allow custom location setting
 // TODO test on Open WiFi... test on very secure wifi?
 // TODO i wish GXEPD didn't clear buffer to black, can i swap?
+// TODO sometimes i compile to 441kB, sometimes i compile to 950kB???
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <gfxfont.h>
@@ -76,18 +77,28 @@ void setup() {
 	gfx.init();
 	gfx.setRotation(3);
 	gfx.firstPage();
-	
-	while (false) // andy GFX demo
+	MakePatterns();	// fill our gfx patterns into RAM
+
+	while (true) // andy GFX demo
 	{
 		gfx.setRotation(3);
-		DrawSplines();
+		//DrawSpecksUnderSpline();
+		gfx.fillScreen(GxEPD_WHITE);
+		DrawPattern(PatternSparseDots, gfx.height()/4*3);
 		delay(2000);
-		DrawSpecks();
+		DrawPatternUnderSpline(PatternZigZagH);
+		AtmoDeepSleep();
 		delay(2000);
-		DrawFont(font12);
-		delay(2000);
-		DrawFont(font9);
-		delay(2000);
+		//DrawSplines();
+		//delay(2000);
+		//DrawSpecks();
+		//delay(2000);
+		//DrawSpecksUnderSpline();
+		//delay(2000);
+		//DrawFont(font12);
+		//delay(2000);
+		//DrawFont(font9);
+		//delay(2000);
 	}
 	//AtmoDeepSleep();
 	//DrawLines();

@@ -30,6 +30,108 @@ const GFXfont* font12 = &FreeSans12pt7b;
 //}
 ////#########################################################################################
 
+class Pattern;
+
+class Pattern
+{
+public:
+	Pattern() {}
+	Pattern(int w, int h)
+	{
+		width = w;
+		height = h;
+	}
+	int height;
+	int width;
+	int* pattern;
+};
+
+Pattern PatternSparseDots(4, 4);
+int _sparseDots[] =
+{
+	1,0,0,0,
+	0,0,0,0,
+	0,0,0,0,
+	0,0,0,0,
+};
+
+Pattern PatternZigZagH(10, 8);
+int _zigZagH[] =
+{
+	0,0,0,0,1,0,0,0,0,0,
+	0,0,0,1,0,1,0,0,0,0,
+	0,0,1,0,0,0,1,0,0,0,
+	0,1,0,0,0,0,0,1,0,0,
+	1,0,0,0,0,0,0,0,1,0,
+	0,0,0,0,0,0,0,0,0,1,
+	0,0,0,0,0,0,0,0,0,0,
+	0,0,0,0,0,0,0,0,0,0,
+};
+
+void MakePatterns() // srsly dont know why this is necessary but whatever not a huge deal - can't do global for some reason
+{
+	PatternSparseDots.pattern = _sparseDots;
+	PatternZigZagH.pattern = _zigZagH;
+}
+
+bool PatternPixelSample(Pattern p, int x, int y) // returns true if a pixel is here on our pattern
+{
+	return p.pattern[(y%p.height)*p.width + x % p.width] == 1;
+}
+
+void DrawPattern(Pattern p, int yStart)
+{
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
+	for (int i = 0; i < gfx.width(); i += 1)
+	{
+		for (int j = yStart; j < gfx.height(); j += 1)
+		{
+			if (PatternPixelSample(p, i, j)) // if pixel is in pattern
+				gfx.drawPixel(i, j, GxEPD_BLACK);
+		}
+	}
+	gfx.nextPage();
+}
+
+void DrawPatternUnderSpline(Pattern p)
+{
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
+	gfx.setTextColor(GxEPD_BLACK);
+	//gfx.fillScreen(GxEPD_WHITE);
+	MakePatterns();
+	std::vector<double> X(10), Y(10);
+	for (int i = 0; i < 10; i++)
+	{
+		X[i] = gfx.width() / 10 * i;
+		if (i % 2 == 1)
+			Y[i] = gfx.height();
+		else
+			Y[i] = gfx.height() / 10 * i;
+	}
+	tk::spline s;
+	//s.set_boundary(tk::spline::second_deriv, 0.0, tk::spline::first_deriv, -2.0, true);
+	s.set_points(X, Y);    // currently it is required that X is already sorted
+
+	for (float x1 = 0; x1 < gfx.width(); x1 += 1)
+	{
+		int y1 = s(x1);
+		int x2 = x1 + 1;
+		int y2 = s(x2);
+		gfx.drawLine(x1, y1, x2, y2, GxEPD_BLACK);
+	}
+
+	for (int i = 0; i < gfx.width(); i += 1)
+	{
+		for (int j = 0; j < gfx.height(); j += 1)
+		{
+			if (PatternPixelSample(p, i, j)) // if pixel is in pattern
+				if (j > (s(i)))	// and if it's below our spline line
+					gfx.drawPixel(i, j, GxEPD_BLACK);
+		}
+	}
+	gfx.nextPage();
+}
+
 void DrawSplines() // drawing experiement to be resumed
 {
 	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
@@ -69,6 +171,44 @@ void DrawSpecks()	// drawing experiement to be resumed
 		for (int j = (i*i) % 10; j < gfx.height(); j += 10)
 		{
 			gfx.drawPixel(i, j, GxEPD_BLACK);
+		}
+	}
+	gfx.nextPage();
+}
+
+void DrawSpecksUnderSpline()
+{
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
+	gfx.setTextColor(GxEPD_BLACK);
+	gfx.fillScreen(GxEPD_WHITE);
+
+	std::vector<double> X(10), Y(10);
+	for (int i = 0; i < 10; i++)
+	{
+		X[i] = gfx.width() / 10 * i;
+		if (i % 2 == 1)
+			Y[i] = gfx.height();
+		else
+			Y[i] = gfx.height() / 10 * i;
+	}
+	tk::spline s;
+	//s.set_boundary(tk::spline::second_deriv, 0.0, tk::spline::first_deriv, -2.0, true);
+	s.set_points(X, Y);    // currently it is required that X is already sorted
+
+	for (float x1 = 0; x1 < gfx.width(); x1 += 1)
+	{
+		int y1 = s(x1);
+		int x2 = x1 + 1;
+		int y2 = s(x2);
+		gfx.drawLine(x1, y1, x2, y2, GxEPD_BLACK);
+	}
+
+	for (int i = 0; i < gfx.width(); i += 1)
+	{
+		for (int j = (i*i) % 10; j < gfx.height(); j += 10)
+		{
+			if (j > (s(i)))	// if under the line, draw the pattern
+				gfx.drawPixel(i, j, GxEPD_BLACK);
 		}
 	}
 	gfx.nextPage();
