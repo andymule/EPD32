@@ -77,6 +77,7 @@ void handle_ExitSetup()
 	}
 
 	gfx.fillScreen(GxEPD_WHITE);
+	gfx.nextPage();
 	prefs.putBool(PREF_VALID_BOOL, true);
 	String ptr = "<!DOCTYPE html> <html>\n";
 	ptr += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
@@ -92,7 +93,10 @@ void handle_ExitSetup()
 	ptr += "</html>\n";
 	server.send(200, "text/html", ptr);
 	server.close();
-	delay(100);	// make sure we write
+	gfx.fillScreen(GxEPD_BLACK);
+	gfx.nextPage(); 
+	gfx.fillScreen(GxEPD_WHITE);
+	gfx.nextPage();
 	esp_deep_sleep(1 * OneSecond);	// TODO is this best? prolly need to flag to avoid hard screen blanking?
 }
 

@@ -73,8 +73,8 @@ void EnableTouchpadWake()
 void AtmoDeepSleep()
 {
 	// TODO blog says: It’s worth setting all pins to inputs before sleep, to ensure there are no active GPIO pull downs consuming power. 
-	gfx.powerOff();	// need to call this or else "they" say screen gets damaged from constant voltage
-	//gfx.hibernate(); // a better power off that lets us wake? idk if my board can do this, seems to glitch
+	//gfx.powerOff();	// need to call this or else "they" say screen gets damaged from constant voltage
+	gfx.hibernate(); // a better power off that lets us wake? idk if my board can do this, seems to glitch
 	EnableTouchpadWake();	// actually allows wake on pin touch???
 	uint64_t sleepTime = 0;
 	if (SleepDriftWasTooFast)

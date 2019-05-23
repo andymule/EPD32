@@ -30,36 +30,67 @@ const GFXfont* font12 = &FreeSans12pt7b;
 //}
 ////#########################################################################################
 
-void DrawLines()	// drawing experiement to be resumed
+void DrawSplines() // drawing experiement to be resumed
 {
-	uint16_t box_x = 10;
-	uint16_t box_y = 15;
-	uint16_t box_w = 70;
-	uint16_t box_h = 20;
-	uint16_t cursor_y = box_y + box_h - 6;
-	//display.getTextBounds(
-	gfx.firstPage();
-	gfx.setFont(&FreeSans9pt7b);
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
 	gfx.setTextColor(GxEPD_BLACK);
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
 	gfx.fillScreen(GxEPD_WHITE);
-	gfx.nextPage();
-	while (true)
+
+	std::vector<double> X(10), Y(10);
+	for (int i = 0; i < 10; i++)
 	{
-		gfx.fillScreen(GxEPD_WHITE);
-		for (int i = 0; i < gfx.height(); i+=10)
+		X[i] = gfx.width() / 10 * i;
+		if (i % 2 == 1)
+			Y[i] = gfx.height();
+		else
+			Y[i] = gfx.height() / 10 * i;
+	}
+	tk::spline s;
+	//s.set_boundary(tk::spline::second_deriv, 0.0, tk::spline::first_deriv, -2.0, true);
+	s.set_points(X, Y);    // currently it is required that X is already sorted
+
+	for (float x1 = 0; x1 < gfx.width(); x1 += 1)
+	{
+		int y1 = s(x1);
+		int x2 = x1 + 1;
+		int y2 = s(x2);
+		gfx.drawLine(x1, y1, x2, y2, GxEPD_BLACK);
+	}
+	gfx.nextPage();
+}
+
+void DrawSpecks()	// drawing experiement to be resumed
+{
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
+	gfx.setTextColor(GxEPD_BLACK);
+	gfx.fillScreen(GxEPD_WHITE);
+	for (int i = 0; i < gfx.width(); i += 1)
+	{
+		for (int j = (i*i) % 10; j < gfx.height(); j += 10)
 		{
-			//gfx.fillRect(box_x, box_y, box_w, box_h, GxEPD_WHITE);
-			gfx.drawPixel(box_x+i, box_y+i, GxEPD_BLACK);
-			gfx.setPartialWindow(box_x+i-5, box_y+i-5, 10, gfx.height());
-			//gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
-			//gfx.drawLine(box_x, box_y, box_x + box_w, box_y + box_h, GxEPD_BLACK);
-			//gfx.drawLine(box_x, box_y, box_x+box_w, box_y+box_h, GxEPD_BLACK);
-			//gfx.drawFastHLine(5, 5, 5, GxEPD_BLACK);
-			//gfx.updateWindow(box_x, box_y, box_w, box_h, true);
-			gfx.nextPage();
+			gfx.drawPixel(i, j, GxEPD_BLACK);
 		}
 	}
+	gfx.nextPage();
+}
+
+void DrawFont(const GFXfont* font)
+{
+	gfx.setRotation(2);
+	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
+	gfx.fillScreen(GxEPD_WHITE);
+	gfx.setTextColor(GxEPD_BLACK);
+	gfx.setCursor(0, 0);
+	gfx.println();
+	gfx.setFont(font);
+	gfx.println(" !\"#$%&'()*+,-./");
+	gfx.println("0123456789:;<=>?");
+	gfx.println("@ABCDEFGHIJKLMNO");
+	gfx.println("PQRSTUVWXYZ[\\]^_");
+	gfx.println("`abcdefghijklmno");
+	gfx.println("pqrstuvwxyz{|}~ ");
+	gfx.println("Umlaut ƒ÷‹‰Èˆ¸");
+	gfx.nextPage();
 }
 
 int HalfWidthOfText(String text, int size)
@@ -211,7 +242,7 @@ void DrawUpdating()
 	int fontsize = 9;
 	int startpoint = 20;
 	int setback = 36;
-	gfx.setPartialWindow(gfx.width() / 2 - setback - 15, startpoint - 15, setback * 2+15, 9 + 4);
+	gfx.setPartialWindow(gfx.width() / 2 - setback - 15, startpoint - 15, setback * 2 + 22, 9 + 4);
 	gfx.fillScreen(GxEPD_WHITE);
 	gfx.setTextColor(GxEPD_BLACK);
 	DrawCenteredString(fontsize, startpoint, "updating", 0);
@@ -222,7 +253,7 @@ void DrawUpdating()
 	//pp(setback);
 	//gfx.
 	gfx.nextPage();	// TODO partial update
-	gfx.fillRect(gfx.width() / 2 - setback-7, startpoint - 5, setback * 2 + 15, 9+4, GxEPD_WHITE);	// cover it up though
+	gfx.fillRect(gfx.width() / 2 - setback - 7, startpoint - 5, setback * 2 + 15, 9 + 4, GxEPD_WHITE);	// cover it up though
 }
 
 void addcloud(int x, int y, int scale, int linesize) {

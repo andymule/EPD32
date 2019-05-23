@@ -44,6 +44,7 @@
 #define pp Serial.println
 
 #include "atmo_types.h"
+#include "atmo_spline.h"
 #include "atmo_gfx.h"
 #include "atmo_sleep.h"
 #include "atmo_wifi.h"
@@ -60,6 +61,8 @@ unsigned long lastConnectionTime = 0;          // Last time you connected to the
 // TODO andymule FOR RELEASE BUILD Disabling all logging and holding the UART disable pin high only increases boot time by around 20 ms?
 void setup() {
 	wifisection = millis();
+	
+
 	//struct timeval wakeTime;
 	//gettimeofday(&wakeTime, NULL);
 	//int sleep_time_ms = (wakeTime.tv_sec - sleep_enter_time.tv_sec) * 1000 + (wakeTime.tv_usec - sleep_enter_time.tv_usec) / 1000;
@@ -71,18 +74,28 @@ void setup() {
 	//Serial.println(" ms");
 
 	gfx.init();
-	//gfx.clearScreen(
-	//gfx.refresh(
 	gfx.setRotation(3);
-	prefs.begin("settings");
-	//gfx.fillScreen(GxEPD_WHITE);
-	//gfx.firstPage();
-	//DrawLines();
+	gfx.firstPage();
+	
+	while (false) // andy GFX demo
+	{
+		gfx.setRotation(3);
+		DrawSplines();
+		delay(2000);
+		DrawSpecks();
+		delay(2000);
+		DrawFont(font12);
+		delay(2000);
+		DrawFont(font9);
+		delay(2000);
+	}
 	//AtmoDeepSleep();
+	//DrawLines();
 	//gfx.drawPicture(Icon1, sizeof(Icon1));
 	//gfx.drawBitmap(gImage_Icon2, sizeof(gImage_Icon2), gfx.bm_default);
-	//AtmoDeepSleep();
 	
+	prefs.begin("settings");
+
 	WakeReason reason = CheckResetReasonAndClearScreenIfNeeded();
 	if (reason==WakeReason::EnterSettings || prefs.getString(PREF_SSID_STRING) == "")
 	{
@@ -90,9 +103,9 @@ void setup() {
 		HostWebsiteForInit();
 		return;	// go straight to webserver setup loop, skip rest of init
 	}
-
-	xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 2048, 0, 1, WiFiTask, BACKGROUND_CORE); // start wifi on other core // TODO Move earlier but dont start if i host the server
 	
+	xTaskCreatePinnedToCore(StartWiFi, "StartWiFi", 2048, 0, 1, WiFiTask, BACKGROUND_CORE); // start wifi on other core // TODO Move earlier but dont start if i host the server
+
 	gfx.setPartialWindow(0, 0, gfx.width(), gfx.height());
 	DrawUpdating();
 	
