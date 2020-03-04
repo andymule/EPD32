@@ -57,28 +57,28 @@ void handle_ExitSetup()
 	for (int i = 0; i < server.args(); i++) {
 		if (server.argName(i) == "n") // wifi name
 		{
-			prefs.putString(PREF_SSID_STRING, server.arg(i));
+			Prefs.putString(PREF_SSID_STRING, server.arg(i));
 		}
 		if (server.argName(i) == "p") // wifi pass
 		{
-			prefs.putString(PREF_PASSWORD_STRING, server.arg(i));
+			Prefs.putString(PREF_PASSWORD_STRING, server.arg(i));
 		}
 		if (server.argName(i) == "metric") 
 		{
 			if (server.arg(i) == "true")
 			{
-				prefs.putBool(PREF_METRIC_BOOL, true);
+				Prefs.putBool(PREF_METRIC_BOOL, true);
 			}
 			else
 			{
-				prefs.putBool(PREF_METRIC_BOOL, false);
+				Prefs.putBool(PREF_METRIC_BOOL, false);
 			}
 		}
 	}
 
 	gfx.fillScreen(GxEPD_WHITE);
 	gfx.nextPage();
-	prefs.putBool(PREF_VALID_BOOL, true);
+	Prefs.putBool(PREF_VALID_BOOL, true);
 	String ptr = "<!DOCTYPE html> <html>\n";
 	ptr += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
 	ptr += "<title>Atmo Weather Friend</title>\n";
@@ -168,20 +168,20 @@ String SendHTML() {
 	ptr += randomExitHandle;
 	ptr += "\" method=GET>WiFi Network: <input type=text name=n value=\"";
 
-	ptr += prefs.getString(PREF_SSID_STRING);
+	ptr += Prefs.getString(PREF_SSID_STRING);
 	ptr += "\"><br><br>";
 
 	ptr += "WiFi Password: <input type=text name=p value=\"";
-	ptr += prefs.getString(PREF_PASSWORD_STRING);
+	ptr += Prefs.getString(PREF_PASSWORD_STRING);
 	ptr += "\"><br><br>";
 
 	ptr += "<input type=radio name=metric";
-	if (prefs.getBool(PREF_METRIC_BOOL))
+	if (Prefs.getBool(PREF_METRIC_BOOL))
 		ptr += " checked ";
 	ptr += " value = true > Metric<br>";
 
 	ptr += "<input type=radio name=metric";
-	if (!prefs.getBool(PREF_METRIC_BOOL))
+	if (!Prefs.getBool(PREF_METRIC_BOOL))
 		ptr += " checked ";
 	ptr += " value = false > Imperial<br>";
 

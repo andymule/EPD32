@@ -6,13 +6,15 @@
 TaskHandle_t* WiFiTask;
 
 void StartWiFi(void *args) {
+	pp("core 0?");
+	pp(xPortGetCoreID());
 	int connAttempts = 0;
 	WiFi.mode(WIFI_STA);
-	WiFi.begin(prefs.getString(PREF_SSID_STRING).c_str(), prefs.getString(PREF_PASSWORD_STRING).c_str());
+	WiFi.begin(Prefs.getString(PREF_SSID_STRING).c_str(), Prefs.getString(PREF_PASSWORD_STRING).c_str());
 	while (WiFi.status() != WL_CONNECTED) {
 		delay(WIFI_DELAY_CHECK_TIME_MS); //Serial.print(F("."));
 		if (connAttempts > WIFI_TIMEOUT_MS / WIFI_DELAY_CHECK_TIME_MS) {
-			prefs.putBool(PREF_VALID_BOOL, false); //invalidate location data // TODO indicate this on display
+			Prefs.putBool(PREF_VALID_BOOL, false); //invalidate location data // TODO indicate this on display
 			DrawFailedToConnectToWiFi();
 			AtmoDeepSleep();
 		}

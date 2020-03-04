@@ -5,8 +5,8 @@ void ParseGeoLocation();
 
 HTTPClient weathercurrenthttp, geolocatehttp;
 // original strings:
-// http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=59.3307&lon=18.0718&units=metric
-//https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&latitude=59.3307&longitude=18.0718
+// OLD// http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=59.3307&lon=18.0718&units=metric
+// CURRENT //https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&latitude=59.3307&longitude=18.0718
 
 //const String weatherCurrent = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
 const String weatherCurrent = "https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&product=observation&oneobservation=true&latitude=";
@@ -15,7 +15,8 @@ const String weatherNoMetric = "&metric=false";
 const String weatherMetric = "&metric=true";	
 const String weatherLanguage = "&language=";	// https://developer.here.com/documentation/weather/topics/supported-languages.html
 
-const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8"; //key=ab925796fd105310f825bbdceece059e
+const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8&fields=city,latitude,longitude"; 
+//key=ab925796fd105310f825bbdceece059e
 
 void GetGeolocationFromNet()
 {
@@ -23,10 +24,12 @@ void GetGeolocationFromNet()
 	geolocatehttp.setTimeout(SITE_TIMEOUT_MS);
 	EnsureWiFiIsStarted();
 	geolocatehttp.begin(geolocatestring);
+	pp(geolocatestring);
 	int geoHttpCode = geolocatehttp.GET();
 	if (geoHttpCode == 200)
 	{
 		ParseGeoLocation();
+		pp("got location:" + Prefs.getString(PREF_CITY_STRING));
 	}
 	else if (geoHttpCode != 200) { // FAILED TO CONNECT TO GEOLOCATE SITE
 		DrawFailedToConnectToSite();	// draws to epaper
@@ -36,8 +39,9 @@ void GetGeolocationFromNet()
 
 int RequestWeatherData()
 {
-	String weatherCall = weatherCurrent + prefs.getFloat(PREF_LAT_FLOAT) + weatherAndLon + prefs.getFloat(PREF_LON_FLOAT);
-	if (prefs.getBool(PREF_METRIC_BOOL))
+	String weatherCall = weatherCurrent + Prefs.getFloat(PREF_LAT_FLOAT) + weatherAndLon + Prefs.getFloat(PREF_LON_FLOAT);
+	pp(weatherCall);
+	if (Prefs.getBool(PREF_METRIC_BOOL))
 	{
 		weatherCall = weatherCall + weatherMetric;
 	}
@@ -47,7 +51,9 @@ int RequestWeatherData()
 	}
 	weathercurrenthttp.setTimeout(SITE_TIMEOUT_MS);
 	EnsureWiFiIsStarted();
+	weathercurrenthttp.addHeader("Content-Encoding", "gzip");
 	weathercurrenthttp.begin(weatherCall); //Specify the URL
+	pp("making actl internet call");
 	return weathercurrenthttp.GET();
 }
 
@@ -96,8 +102,13 @@ void SetClockAndDriftCompensate() // TODO put on second core?
 
 void ParseWeatherAndTime()
 {
-	DynamicJsonDocument weatherCurrentDoc(12000);
-	DeserializationError error = deserializeJson(weatherCurrentDoc, weathercurrenthttp.getString()); //optimize doc size
+	ArduinoJson6141_0000010::DynamicJsonDocument weatherCurrentDoc(12000);
+	/*InputStream instream = response.getEntity().getContent();
+	Header contentEncoding = response.getFirstHeader("Content-Encoding");
+	if (contentEncoding != null && contentEncoding.getValue().equalsIgnoreCase("gzip")) {
+		instream = new GZIPInputStream(instream);
+	}*/
+	ArduinoJson6141_0000010::DeserializationError error =  deserializeJson(weatherCurrentDoc, weathercurrenthttp.getString()); //optimize doc size
 
 	if (error) {
 		Serial.print(F("deserializeJson() failed22: "));
@@ -142,8 +153,8 @@ void ParseGeoLocation()
 			//StaticJsonDocument<capacity> doc;
 			// TODO look into this for making exactly sized JSON docs
 			//"Of course, if the JsonDocument were bigger, it would make sense to move it the heap" (<- from PDF)
-	DynamicJsonDocument geoDoc(900);
-	DeserializationError error = deserializeJson(geoDoc, geolocatehttp.getString());  //optimize doc size
+	ArduinoJson6141_0000010::StaticJsonDocument<200> geoDoc;
+	ArduinoJson6141_0000010::DeserializationError error = deserializeJson(geoDoc, geolocatehttp.getString());  //optimize doc size
 	if (error) {
 		Serial.print(F("deserializeJson() failed 1 : "));
 		Serial.println(error.c_str());
@@ -151,8 +162,9 @@ void ParseGeoLocation()
 	}
 	String city = geoDoc["city"].as<String>();
 	city.replace(" ", "%20");
-	prefs.putBool(PREF_VALID_BOOL, true);
-	prefs.putFloat(PREF_LAT_FLOAT, geoDoc["latitude"]);
-	prefs.putFloat(PREF_LON_FLOAT, geoDoc["longitude"]);
-	prefs.putString(PREF_CITY_STRING, city);
+	pp(city);
+	Prefs.putBool(PREF_VALID_BOOL, true);
+	Prefs.putFloat(PREF_LAT_FLOAT, geoDoc["latitude"]);
+	Prefs.putFloat(PREF_LON_FLOAT, geoDoc["longitude"]);
+	Prefs.putString(PREF_CITY_STRING, city);
 }

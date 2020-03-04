@@ -1,6 +1,12 @@
 #pragma once
-
-Preferences prefs;	// used to save and load from memory
+Preferences Prefs;	// used to save and load from memory
+#define PREF_VALID_BOOL "valid"
+#define PREF_METRIC_BOOL "useMetric"
+#define PREF_LAT_FLOAT "lat"
+#define PREF_LON_FLOAT "lon"
+#define PREF_CITY_STRING "city"
+#define PREF_PASSWORD_STRING "wifi_password"
+#define PREF_SSID_STRING "wifi_ssid"
 
 class WeatherDay
 {
@@ -21,15 +27,6 @@ String TodaySky;
 String TodayTempDesc;
 int TodayHigh;
 int TodayLow;
-
-// a dumb sort of enum kinda
-#define PREF_VALID_BOOL "valid"
-#define PREF_LAT_FLOAT "lat"
-#define PREF_LON_FLOAT "lon"
-#define PREF_CITY_STRING "city"
-#define PREF_METRIC_BOOL "useMetric"
-#define PREF_PASSWORD_STRING "wifi_password"
-#define PREF_SSID_STRING "wifi_ssid"
 
 /*
 https://developer.here.com/documentation/weather/topics/resource-type-weather-items.html

@@ -1,6 +1,6 @@
 #pragma once
 // getTextBounds
-GxEPD2_BW<GxEPD2_290, GxEPD2_290::HEIGHT> gfx(GxEPD2_290(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4));
+GxEPD2_BW<GxEPD2_290, GxEPD2_290::HEIGHT> gfx(GxEPD2_290(/*CS=5*/ 5, /*DC=*/ 19, /*RST=*/ 12, /*BUSY=*/ 4));
 const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
 const GFXfont* font12 = &FreeSans12pt7b;
 
@@ -306,7 +306,7 @@ void DrawWeather()
 	// city in top left
 	gfx.setFont();	// uses tiny default font
 	gfx.setCursor(0, 0);
-	gfx.print(prefs.getString(PREF_CITY_STRING));
+	gfx.print( Prefs.getString(PREF_CITY_STRING) );
 
 	// time in top right
 	gfx.setCursor(gfx.width() - gfx.width() / 9 + 2, 0);
