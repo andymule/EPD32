@@ -1,26 +1,29 @@
 #pragma once
-#define SITE_TIMEOUT_MS 5000 // timeout for site request
+#define SITE_TIMEOUT_MS 5000
 #define WIFI_DELAY_CHECK_TIME_MS 50
-#define WIFI_TIMEOUT_MS 10000 // 10 sec to connect to wifi?
+#define WIFI_TIMEOUT_MS 10000
 
-TaskHandle_t* WiFiTask;
+TaskHandle_t WiFiTask;
+SemaphoreHandle_t wifiConnectedSemaphore;
+String cachedSSID;
+String cachedPassword;
 
 void StartWiFi(void *args) {
-	pp("core 0?");
 	pp(xPortGetCoreID());
 	int connAttempts = 0;
 	WiFi.mode(WIFI_STA);
-	WiFi.begin(Prefs.getString(PREF_SSID_STRING).c_str(), Prefs.getString(PREF_PASSWORD_STRING).c_str());
+	WiFi.begin(cachedSSID.c_str(), cachedPassword.c_str());
 	while (WiFi.status() != WL_CONNECTED) {
-		delay(WIFI_DELAY_CHECK_TIME_MS); //Serial.print(F("."));
+		delay(WIFI_DELAY_CHECK_TIME_MS);
 		if (connAttempts > WIFI_TIMEOUT_MS / WIFI_DELAY_CHECK_TIME_MS) {
-			Prefs.putBool(PREF_VALID_BOOL, false); //invalidate location data // TODO indicate this on display
+			Prefs.putBool(PREF_VALID_BOOL, false);
 			DrawFailedToConnectToWiFi();
 			AtmoDeepSleep();
 		}
 		connAttempts++;
 	}
-	vTaskDelete(NULL); // deletes self
+	xSemaphoreGive(wifiConnectedSemaphore);
+	vTaskDelete(NULL);
 }
 
 void StopWiFi() {
@@ -29,15 +32,10 @@ void StopWiFi() {
 
 void EnsureWiFiIsStarted()
 {
-	int counter = 0;
-	while (!WiFi.isConnected())
+	if (WiFi.isConnected()) return;
+	if (xSemaphoreTake(wifiConnectedSemaphore, pdMS_TO_TICKS(WIFI_TIMEOUT_MS + 5000)) != pdTRUE)
 	{
-		if (counter % 10 == 0)
-		{
-			counter = 0;
-			Serial.println(".");
-		}
-		counter++;
-		delay(10);
+		DrawFailedToConnectToWiFi();
+		AtmoDeepSleep();
 	}
 }

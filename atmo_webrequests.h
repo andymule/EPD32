@@ -3,58 +3,61 @@ void GetGeolocationFromNet();
 void ParseWeatherAndTime();
 void ParseGeoLocation();
 
+const int HTTP_MAX_RETRIES = 3;
+const int HTTP_RETRY_DELAY_MS = 1000;
+
 HTTPClient weathercurrenthttp, geolocatehttp;
-// original strings:
-// OLD// http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=59.3307&lon=18.0718&units=metric
-// CURRENT //https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&latitude=59.3307&longitude=18.0718
+const char* weatherCurrent = "https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&product=observation&oneobservation=true&latitude=";
+const char* weatherAndLon = "&longitude=";
+const char* weatherNoMetric = "&metric=false";
+const char* weatherMetric = "&metric=true";
 
-//const String weatherCurrent = "http://api.openweathermap.org/data/2.5/weather?&appid=ba42e4a918f7e742d3143c5e8fff9210&lat=";
-const String weatherCurrent = "https://weather.api.here.com/weather/1.0/report.json?app_id=JoN1SBsEzJ5pWD5OkXwN&app_code=J9XdgHlHuUKzV2j5GqxlVg&product=forecast_7days_simple&product=observation&oneobservation=true&latitude=";
-const String weatherAndLon = "&longitude=";
-const String weatherNoMetric = "&metric=false";	
-const String weatherMetric = "&metric=true";	
-const String weatherLanguage = "&language=";	// https://developer.here.com/documentation/weather/topics/supported-languages.html
-
-const String geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8&fields=city,latitude,longitude"; 
-//key=ab925796fd105310f825bbdceece059e
+const char* geolocatestring = "http://api.ipstack.com/check?access_key=d0dfe9b52fa3f5bb2a5ff47ce435c7d8&fields=city,latitude,longitude";
 
 void GetGeolocationFromNet()
 {
 	pp("getting geolocation from internet");
-	geolocatehttp.setTimeout(SITE_TIMEOUT_MS);
 	EnsureWiFiIsStarted();
-	geolocatehttp.begin(geolocatestring);
-	pp(geolocatestring);
-	int geoHttpCode = geolocatehttp.GET();
-	if (geoHttpCode == 200)
-	{
+	geolocatehttp.setTimeout(SITE_TIMEOUT_MS);
+	int geoHttpCode = -1;
+	for (int attempt = 0; attempt < HTTP_MAX_RETRIES; attempt++) {
+		geolocatehttp.begin(geolocatestring);
+		geoHttpCode = geolocatehttp.GET();
+		if (geoHttpCode == 200) break;
+		geolocatehttp.end();
+		pp("Geo attempt " + String(attempt + 1) + " failed: " + String(geoHttpCode));
+		delay(HTTP_RETRY_DELAY_MS);
+	}
+	if (geoHttpCode == 200) {
 		ParseGeoLocation();
 		pp("got location:" + Prefs.getString(PREF_CITY_STRING));
-	}
-	else if (geoHttpCode != 200) { // FAILED TO CONNECT TO GEOLOCATE SITE
-		DrawFailedToConnectToSite();	// draws to epaper
+	} else {
+		DrawFailedToConnectToSite();
 		AtmoDeepSleep();
 	}
 }
 
 int RequestWeatherData()
 {
-	String weatherCall = weatherCurrent + Prefs.getFloat(PREF_LAT_FLOAT) + weatherAndLon + Prefs.getFloat(PREF_LON_FLOAT);
+	String weatherCall = weatherCurrent;
+	weatherCall += Prefs.getFloat(PREF_LAT_FLOAT);
+	weatherCall += weatherAndLon;
+	weatherCall += Prefs.getFloat(PREF_LON_FLOAT);
+	weatherCall += Prefs.getBool(PREF_METRIC_BOOL) ? weatherMetric : weatherNoMetric;
 	pp(weatherCall);
-	if (Prefs.getBool(PREF_METRIC_BOOL))
-	{
-		weatherCall = weatherCall + weatherMetric;
-	}
-	else
-	{
-		weatherCall = weatherCall + weatherNoMetric;
-	}
-	weathercurrenthttp.setTimeout(SITE_TIMEOUT_MS);
 	EnsureWiFiIsStarted();
-	weathercurrenthttp.addHeader("Content-Encoding", "gzip");
-	weathercurrenthttp.begin(weatherCall); //Specify the URL
-	pp("making actl internet call");
-	return weathercurrenthttp.GET();
+	weathercurrenthttp.setTimeout(SITE_TIMEOUT_MS);
+	int httpCode = -1;
+	for (int attempt = 0; attempt < HTTP_MAX_RETRIES; attempt++) {
+		weathercurrenthttp.begin(weatherCall);
+		weathercurrenthttp.addHeader("Accept-Encoding", "gzip");
+		httpCode = weathercurrenthttp.GET();
+		if (httpCode == 200) break;
+		weathercurrenthttp.end();
+		pp("Weather attempt " + String(attempt + 1) + " failed: " + String(httpCode));
+		delay(HTTP_RETRY_DELAY_MS);
+	}
+	return httpCode;
 }
 
 
@@ -64,22 +67,22 @@ void ParseCurrentTimeForDisplay(int timezone)
 	int startI = CurrentTime.indexOf('T');
 	int hourI = CurrentTime.indexOf(':');
 	int minuteI = hourI + 3;
-	int hour = CurrentTime.substring(startI + 1, hourI).toInt() + timezone; // TODO add timezone 4real -- use lib tho haha
+	int hour = CurrentTime.substring(startI + 1, hourI).toInt() + timezone;
 	String minutes = CurrentTime.substring(hourI + 1, minuteI);
 	CurrentTime = String(hour) + ":" + minutes;
 	if (CurrentTime.length() < 5)
 		CurrentTime = " " + CurrentTime;	// prepend whitespace to keep time in the corner
 }
 
-void SetClockAndDriftCompensate() // TODO put on second core?
+void SetClockAndDriftCompensate()
 {	// CurrentTime should be freshly parsed from JSON at this point
-	// 0YYY-5M-8DThh:mm:ssfZ
+	// Format: YYYY-MM-DDThh:mm:ssZ  (ISO 8601)
 	int YYYY = CurrentTime.substring(0, 4).toInt();
-	int MM = CurrentTime.substring(5, 2).toInt();
-	int DD = CurrentTime.substring(8, 2).toInt();
-	int hh = CurrentTime.substring(11, 2).toInt();
-	int mm = CurrentTime.substring(14, 2).toInt();
-	int ss = CurrentTime.substring(17, 2).toInt();
+	int MM = CurrentTime.substring(5, 7).toInt();
+	int DD = CurrentTime.substring(8, 10).toInt();
+	int hh = CurrentTime.substring(11, 13).toInt();
+	int mm = CurrentTime.substring(14, 16).toInt();
+	int ss = CurrentTime.substring(17, 19).toInt();
 	tmElements_t tm;
 	tm.Year = CalendarYrToTm(YYYY);
 	tm.Month = MM;
@@ -87,77 +90,72 @@ void SetClockAndDriftCompensate() // TODO put on second core?
 	tm.Hour = hh;
 	tm.Minute = mm;
 	tm.Second = ss;
-	time_t oldTime = now();
 	time_t newTime = makeTime(tm);
 	setTime(newTime);
-	int64_t timeDriftSeconds = newTime - oldTime; // negative if i woke up early, bc oldtime was too fast
-	SleepDriftWasTooFast = (timeDriftSeconds < 0);
-	if (SleepDriftWasTooFast)
-		timeDriftSeconds *= -1;
-	if (oldTime < 1579461559)
-		timeDriftSeconds = 0;	// TODO make this whole thing not terrible, set time in hard wake eg
-	SleepDriftCompensation = (uint64_t)timeDriftSeconds * OneSecond;
+
+	// Drift = actual elapsed time vs intended sleep duration
+	const time_t JAN_20_2020 = 1579461559;
+	if (lastServerTime > JAN_20_2020 && lastSleepDuration > 0)
+	{
+		int64_t actualElapsedSec = (int64_t)(newTime - lastServerTime);
+		int64_t intendedElapsedSec = (int64_t)(lastSleepDuration / OneSecond);
+		int64_t driftSeconds = actualElapsedSec - intendedElapsedSec;
+		SleepDriftWasTooFast = (driftSeconds < 0);
+		if (SleepDriftWasTooFast)
+			driftSeconds *= -1;
+		SleepDriftCompensation = (uint64_t)driftSeconds * OneSecond;
+	}
+	lastServerTime = newTime;
 }
 
 
 void ParseWeatherAndTime()
 {
-	ArduinoJson6141_0000010::DynamicJsonDocument weatherCurrentDoc(12000);
-	/*InputStream instream = response.getEntity().getContent();
-	Header contentEncoding = response.getFirstHeader("Content-Encoding");
-	if (contentEncoding != null && contentEncoding.getValue().equalsIgnoreCase("gzip")) {
-		instream = new GZIPInputStream(instream);
-	}*/
-	ArduinoJson6141_0000010::DeserializationError error =  deserializeJson(weatherCurrentDoc, weathercurrenthttp.getString()); //optimize doc size
+	DynamicJsonDocument weatherCurrentDoc(12000);
+	DeserializationError error = deserializeJson(weatherCurrentDoc, weathercurrenthttp.getString());
 
 	if (error) {
-		Serial.print(F("deserializeJson() failed22: "));
-		Serial.println(error.c_str());
+		pp("Weather JSON parse failed: " + String(error.c_str()));
 		AtmoDeepSleep();
 	}
 	String ObservationTime = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["utcTime"].as<String>();
-	int timezonestartI = ObservationTime.lastIndexOf('+');
-	int timezoneendI = ObservationTime.lastIndexOf(':');
-	int timezone = ObservationTime.substring(timezonestartI + 1, timezoneendI).toInt();
+	int tI = ObservationTime.indexOf('T');
+	int plusI = ObservationTime.indexOf('+', tI);
+	int minusI = ObservationTime.indexOf('-', tI + 1);
+	int timezone = 0;
+	if (plusI > tI) {
+		int colonI = ObservationTime.indexOf(':', plusI);
+		timezone = ObservationTime.substring(plusI + 1, colonI).toInt();
+	} else if (minusI > tI) {
+		int colonI = ObservationTime.indexOf(':', minusI);
+		timezone = -ObservationTime.substring(minusI + 1, colonI).toInt();
+	}
 	CurrentTime = weatherCurrentDoc["feedCreation"].as<String>();
 	SetClockAndDriftCompensate();
 	ParseCurrentTimeForDisplay(timezone);
 
-	for (int i = 0; i <= 7; i++)
+	for (int i = 0; i < FORECAST_DAYS; i++)
 	{
-		//WeatherDays[i].UTCTime = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["utcTime"];
-		WeatherDays[i].DayOfWeek = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["weekday"].as<char*>();
+		WeatherDays[i].DayOfWeek = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["weekday"].as<String>();
 		WeatherDays[i].High = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["highTemperature"];
 		WeatherDays[i].Low = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["lowTemperature"];
 		WeatherDays[i].PrecipChance = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["precipitationProbability"];
-		WeatherDays[i].SkyText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["skyDescription"];
-		WeatherDays[i].PrecipText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["precipitationDesc"];
+		WeatherDays[i].SkyText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["skyDescription"].as<String>();
+		WeatherDays[i].PrecipText = weatherCurrentDoc["dailyForecasts"]["forecastLocation"]["forecast"][i]["precipitationDesc"].as<String>();
 	}
 
-	TodayHigh = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["highTemperature"];
-	TodayLow = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["lowTemperature"];
 	TodaySky = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["skyDescription"].as<String>();
 	TodayTempDesc = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperatureDesc"].as<String>();
-	//TodayTempDesc.toLowerCase();
-	//TodaySky.toLowerCase();
 	CurrentTemp = weatherCurrentDoc["observations"]["location"][0]["observation"][0]["temperature"];
 }
 
 
 void ParseGeoLocation()
 {
-	// Enough space for:
-			// + 1 object with 3 members
-			// + 2 objects with 1 member
-			//const int capacity = JSON_OBJECT_SIZE(3) + 2 * JSON_OBJECT_SIZE(1);
-			//StaticJsonDocument<capacity> doc;
-			// TODO look into this for making exactly sized JSON docs
-			//"Of course, if the JsonDocument were bigger, it would make sense to move it the heap" (<- from PDF)
-	ArduinoJson6141_0000010::StaticJsonDocument<200> geoDoc;
-	ArduinoJson6141_0000010::DeserializationError error = deserializeJson(geoDoc, geolocatehttp.getString());  //optimize doc size
+	StaticJsonDocument<200> geoDoc;
+	DeserializationError error = deserializeJson(geoDoc, geolocatehttp.getString());
 	if (error) {
-		Serial.print(F("deserializeJson() failed 1 : "));
-		Serial.println(error.c_str());
+		pp("Geolocation JSON parse failed: " + String(error.c_str()));
 		AtmoDeepSleep();
 	}
 	String city = geoDoc["city"].as<String>();

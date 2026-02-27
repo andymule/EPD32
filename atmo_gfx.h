@@ -1,54 +1,21 @@
 #pragma once
-// getTextBounds
-GxEPD2_BW<GxEPD2_290, GxEPD2_290::HEIGHT> gfx(GxEPD2_290(/*CS=5*/ 5, /*DC=*/ 19, /*RST=*/ 12, /*BUSY=*/ 4));
-const GFXfont* font9 = &FreeSans9pt7b;		// TODO andymule use ishac fonts
+
+GxEPD2_BW<GxEPD2_290, GxEPD2_290::HEIGHT> gfx(GxEPD2_290(/*CS=*/ 5, /*DC=*/ 19, /*RST=*/ 12, /*BUSY=*/ 4));
+const GFXfont* font9 = &FreeSans9pt7b;
 const GFXfont* font12 = &FreeSans12pt7b;
-
-// useful tools, like bitmap converter, fonts, and font converters
-// https://github.com/cesanta/arduino-drivers/tree/master/Adafruit-GFX-Library
-// showFont("FreeMonoBold9pt7b", &FreeMonoBold9pt7b); // draws all chars
-
-//const int width = 296;
-//const int height = 128;
-
-////#########################################################################################
-//void DrawPressureTrend(int x, int y, float pressure, String slope) {
-//	gfx.drawString(90, 47, String(pressure, 1) + (Units == "M" ? "mb" : "in"));
-//	x = x + 8;
-//	if (slope == "+") {
-//		gfx.drawLine(x, y, x + 4, y - 4);
-//		gfx.drawLine(x + 4, y - 4, x + 8, y);
-//	}
-//	else if (slope == "0") {
-//		gfx.drawLine(x + 3, y - 4, x + 8, y);
-//		gfx.drawLine(x + 3, y + 4, x + 8, y);
-//	}
-//	else if (slope == "-") {
-//		gfx.drawLine(x, y, x + 4, y + 4);
-//		gfx.drawLine(x + 4, y + 4, x + 8, y);
-//	}
-//}
-////#########################################################################################
-
-class Pattern;
 
 class Pattern
 {
 public:
-	Pattern() {}
-	Pattern(int w, int h)
-	{
-		width = w;
-		height = h;
-	}
-	int height;
+	Pattern() : width(0), height(0), pattern(NULL) {}
+	Pattern(int w, int h) : width(w), height(h), pattern(NULL) {}
 	int width;
-	int* pattern;
+	int height;
+	const uint8_t* pattern;
 };
 
 Pattern PatternSparseDots(4, 4);
-int _sparseDots[] =
-{
+const uint8_t _sparseDots[] = {
 	1,0,0,0,
 	0,0,0,0,
 	0,0,0,0,
@@ -56,8 +23,7 @@ int _sparseDots[] =
 };
 
 Pattern PatternZigZagH(10, 8);
-int _zigZagH[] =
-{
+const uint8_t _zigZagH[] = {
 	0,0,0,0,1,0,0,0,0,0,
 	0,0,0,1,0,1,0,0,0,0,
 	0,0,1,0,0,0,1,0,0,0,
@@ -68,15 +34,15 @@ int _zigZagH[] =
 	0,0,0,0,0,0,0,0,0,0,
 };
 
-void MakePatterns() // srsly dont know why this is necessary but whatever not a huge deal - can't do global for some reason
+void MakePatterns()
 {
 	PatternSparseDots.pattern = _sparseDots;
 	PatternZigZagH.pattern = _zigZagH;
 }
 
-bool PatternPixelSample(Pattern p, int x, int y) // returns true if a pixel is here on our pattern
+bool PatternPixelSample(const Pattern& p, int x, int y)
 {
-	return p.pattern[(y%p.height)*p.width + x % p.width] == 1;
+	return p.pattern[(y % p.height) * p.width + x % p.width] == 1;
 }
 
 void DrawPattern(Pattern p, int yStart)
@@ -229,13 +195,16 @@ void DrawFont(const GFXfont* font)
 	gfx.println("PQRSTUVWXYZ[\\]^_");
 	gfx.println("`abcdefghijklmno");
 	gfx.println("pqrstuvwxyz{|}~ ");
-	gfx.println("Umlaut ÄÖÜäéöü");
+	gfx.println("Umlaut ");
 	gfx.nextPage();
 }
 
-int HalfWidthOfText(String text, int size)
+int GetTextWidth(const String& text)
 {
-	return text.length()*size / 2;
+	int16_t x1, y1;
+	uint16_t w, h;
+	gfx.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+	return (int)w;
 }
 
 void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeight)
@@ -243,23 +212,10 @@ void DrawDayOfWeek(int daysAfterToday, int width, int heightStart, int fontHeigh
 	gfx.setFont();	// resets to default little font guy
 	gfx.setTextColor(GxEPD_BLACK);
 	gfx.setCursor(width*(daysAfterToday), heightStart);
-	char c1 = WeatherDays[daysAfterToday].DayOfWeek[0];
-	char c2 = WeatherDays[daysAfterToday].DayOfWeek[1];
-	char c3 = WeatherDays[daysAfterToday].DayOfWeek[2];
-	String s;
-	s = s + c1 + c2 + c3;
-	//char* smallDay = "   "; //blank 3 chars
-	//strncpy(smallDay, WeatherDays[daysAfterToday].DayOfWeek, 3); // TODO why does strncpy crash esp?
+	String s = WeatherDays[daysAfterToday].DayOfWeek.substring(0, 3);
 	gfx.println(s);
 	gfx.setCursor(width*(daysAfterToday), heightStart + fontHeight);
 
-	//String CheckText = String(WeatherDays[daysAfterToday].SkyText);
-	//String CheckText = String(WeatherDays[daysAfterToday].PrecipText);
-	//String PrintText = String(CheckText);	// TODO smarter way to display just one word, need a real parser
-	//if (CheckText.indexOf(" ") > 0)
-	//{
-		//PrintText = CheckText.substring(CheckText.lastIndexOf(" ") + 1, CheckText.length());
-	//}
 	String PrecipChanceString = String(WeatherDays[daysAfterToday].PrecipChance);
 	gfx.println(PrecipChanceString + "%");
 
@@ -277,23 +233,16 @@ void DrawDaysAhead(int daysAhead)
 	}
 }
 
-void DrawCenteredString(int fontsize, int y_pos, String s, int nudge) // requires color set beforehand
+void DrawCenteredString(int fontsize, int y_pos, const String& s, int nudge)
 {
 	switch (fontsize)
 	{
-	case 9:
-		gfx.setFont(font9);
-		break;
-	case 12:
-		gfx.setFont(font12);
-		break;
-	default:
-		fontsize = 8;
-		gfx.setFont();
-		break;
+	case 9:  gfx.setFont(font9);  break;
+	case 12: gfx.setFont(font12); break;
+	default: gfx.setFont();       break;
 	}
-	int setback = HalfWidthOfText(s, fontsize);
-	gfx.setCursor(gfx.width() / 2 - setback + nudge, y_pos);
+	int tw = GetTextWidth(s);
+	gfx.setCursor(gfx.width() / 2 - tw / 2 + nudge, y_pos);
 	gfx.println(s);
 }
 
@@ -303,36 +252,28 @@ void DrawWeather()
 	gfx.fillScreen(GxEPD_WHITE);
 	int setback = 0;
 	gfx.setTextColor(GxEPD_BLACK);
-	// city in top left
-	gfx.setFont();	// uses tiny default font
-	gfx.setCursor(0, 0);
-	gfx.print( Prefs.getString(PREF_CITY_STRING) );
 
-	// time in top right
+	gfx.setFont();
+	gfx.setCursor(0, 0);
+	gfx.print(Prefs.getString(PREF_CITY_STRING));
+
 	gfx.setCursor(gfx.width() - gfx.width() / 9 + 2, 0);
 	gfx.print(CurrentTime);
 
-	//day of week
-	//gfx.setFont(font12);
-	//gfx.setCursor(gfx.width() / 2 - 16, 30);
-	//gfx.println(WeatherDays[0].DayOfWeek);
 	gfx.setFont(font12);
-	setback = HalfWidthOfText(String(WeatherDays[0].Low), 12);
+	setback = GetTextWidth(String(WeatherDays[0].Low)) / 2;
 	gfx.setCursor(gfx.width() / 4 - setback, 35);
-	//gfx.print(" Low:");
 	gfx.print(WeatherDays[0].Low);
-	//gfx.println("°");	// TODO andymule draw degrees // TODO turn centering boilerplate into method
-	setback = HalfWidthOfText(String(WeatherDays[0].High), 12);
+
+	setback = GetTextWidth(String(WeatherDays[0].High)) / 2;
 	gfx.setCursor(gfx.width() - gfx.width() / 4 - setback, 35);
-	//gfx.print("High:");
 	gfx.print(WeatherDays[0].High);
-	//gfx.println(String("°"));	// TODO andymule draw degrees // TODO turn centering boilerplate into method
+
 	DrawCenteredString(9, 53, TodayTempDesc, 0);
 	DrawCenteredString(9, 73, TodaySky, 0);
 	DrawCenteredString(9, 20, String(CurrentTemp), 0);
-	DrawDaysAhead(6);
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.nextPage();// TODO partial update
+	DrawDaysAhead(FORECAST_DAYS);
+	gfx.nextPage();
 }
 
 void DrawConnectionInstructions()
@@ -346,9 +287,7 @@ void DrawConnectionInstructions()
 	gfx.println("Then, browse to at.mo");
 	gfx.println();
 	gfx.println("Configure and enjoy!");
-	//gfx.update
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.nextPage();// TODO partial update
+	gfx.nextPage();
 }
 
 void DrawFailedToConnectToSite()
@@ -360,8 +299,7 @@ void DrawFailedToConnectToSite()
 	gfx.setCursor(0, 60 + 9);
 	gfx.println("Failed to connect to sites.");
 	gfx.println("Check your internet connection.");
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.nextPage();// TODO partial update
+	gfx.nextPage();
 }
 
 void DrawFailedToConnectToWiFi()
@@ -373,27 +311,29 @@ void DrawFailedToConnectToWiFi()
 	gfx.setCursor(0, 30 + 9);
 	gfx.println("Failed to connect to WiFi.");
 	gfx.println("Check your router or Atmo settings.");
-	//gfx.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
-	gfx.nextPage();// TODO partial update
+	gfx.nextPage();
 }
 
 void DrawUpdating()
 {
-	int fontsize = 9;
-	int startpoint = 20;
-	int setback = 36;
-	gfx.setPartialWindow(gfx.width() / 2 - setback - 15, startpoint - 15, setback * 2 + 22, 9 + 4);
-	gfx.fillScreen(GxEPD_WHITE);
+	gfx.setFont(font9);
 	gfx.setTextColor(GxEPD_BLACK);
-	DrawCenteredString(fontsize, startpoint, "updating", 0);
-	setback = HalfWidthOfText("updating", fontsize);
-	//gfx.fillRect(gfx.width() / 2 - setback, startpoint - 15, setback * 2 + 3, 9 + 4 * 2, GxEPD_BLACK);	// cover it up though
-	//gfx.updateWindow(gfx.width() / 2 - setback, startpoint - 5, setback * 2, 9+4, true);
-	//pp("SETBACK");
-	//pp(setback);
-	//gfx.
-	gfx.nextPage();	// TODO partial update
-	gfx.fillRect(gfx.width() / 2 - setback - 7, startpoint - 5, setback * 2 + 15, 9 + 4, GxEPD_WHITE);	// cover it up though
+	int16_t bx, by;
+	uint16_t bw, bh;
+	gfx.getTextBounds("updating", 0, 0, &bx, &by, &bw, &bh);
+	int cx = gfx.width() / 2;
+	int cy = 20;
+	int pad = 4;
+	int wx = cx - bw / 2 - pad;
+	int wy = cy + by - pad;
+	int ww = bw + pad * 2;
+	int wh = bh + pad * 2;
+	gfx.setPartialWindow(wx, wy, ww, wh);
+	gfx.fillScreen(GxEPD_WHITE);
+	gfx.setCursor(cx - bw / 2, cy);
+	gfx.print("updating");
+	gfx.nextPage();
+	gfx.fillRect(wx, wy, ww, wh, GxEPD_WHITE);
 }
 
 void addcloud(int x, int y, int scale, int linesize) {

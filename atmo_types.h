@@ -14,19 +14,17 @@ public:
 	int High;
 	int Low;
 	int PrecipChance;
-	const char* SkyText;
-	const char* PrecipText;
-	//const char* UTCTime;
-	const char* DayOfWeek;
+	String SkyText;
+	String PrecipText;
+	String DayOfWeek;
 };
-WeatherDay WeatherDays[10] = {};
+const int FORECAST_DAYS = 6;
+WeatherDay WeatherDays[FORECAST_DAYS] = {};
 
 String CurrentTime;
 int CurrentTemp;
 String TodaySky;
 String TodayTempDesc;
-int TodayHigh;
-int TodayLow;
 
 /*
 https://developer.here.com/documentation/weather/topics/resource-type-weather-items.html
