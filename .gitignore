@@ -261,3 +261,9 @@ __pycache__/
 *.pyc
 /EPD32.vcxproj.filters
 /__vm
+
+# PlatformIO
+.pio/
+.pio
+# Local development secrets (copied from include/Secrets.h.example)
+include/Secrets.h
