@@ -31,9 +31,10 @@ constexpr uint64_t ONE_MINUTE_US = ONE_SECOND_US * 60;
 constexpr uint64_t ONE_HOUR_US = ONE_MINUTE_US * 60;
 constexpr uint64_t ONE_DAY_US = ONE_HOUR_US * 24;
 
-// How long the display sleeps between refreshes.
-constexpr uint64_t REFRESH_INTERVAL_US = ONE_DAY_US;
-
+// Normal operation wakes at the top of every hour to redraw the clock from
+// cached data (see SleepManager::deepSleep); a network fetch happens only once a
+// day at FETCH_HOUR, on a button press, or on a hard reset.
+//
 // Shorter sleep used to retry soon after a failed update (network hiccup etc.)
 // instead of going dark for a full day. On repeated failures the retry interval
 // backs off exponentially (1h, 2h, 4h, ...) so a prolonged outage (router down,
@@ -66,7 +67,25 @@ constexpr const char* LON = "lon";
 constexpr const char* CITY = "city";
 constexpr const char* PASSWORD = "wifi_password";
 constexpr const char* SSID = "wifi_ssid";
+constexpr const char* STYLE = "layoutStyle";  // 0=Dashboard, 1=Horizon
+constexpr const char* ROTATION = "rotation";  // 0/2=portrait, 1/3=landscape
+constexpr const char* FETCH_HOUR = "fetchHour";    // local hour of daily fetch
+constexpr const char* QUIET_START = "quietStart";  // hourly redraws pause from..
+constexpr const char* QUIET_END = "quietEnd";      // ..until this local hour
 }  // namespace prefs
+
+// Schedule defaults (local hours, 0-23) used when nothing is stored yet.
+namespace sched_defaults {
+constexpr uint8_t FETCH_HOUR = 5;    // daily network fetch at 5am
+constexpr uint8_t QUIET_START = 22;  // no hourly redraws 10pm..
+constexpr uint8_t QUIET_END = 5;     // ..through 5am (the fetch still happens)
+}  // namespace sched_defaults
+
+// Display layout/orientation defaults (used when nothing is stored yet).
+namespace display_defaults {
+constexpr uint8_t STYLE = 1;     // Horizon
+constexpr uint8_t ROTATION = 0;  // portrait (128x296)
+}  // namespace display_defaults
 
 // ---------------------------------------------------------------------------
 // External services (both keyless / no signup required)

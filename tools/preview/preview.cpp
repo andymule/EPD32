@@ -6,10 +6,14 @@
 #include "host_gfx.h"
 #include "../../src/display/weather_layout.h"
 
+#include "fonts/FreeSans6pt7b.h"
+#include "fonts/FreeSans7pt7b.h"
 #include "fonts/FreeSans9pt7b.h"
 #include "fonts/FreeSans12pt7b.h"
 #include "fonts/FreeSans18pt7b.h"
 #include "fonts/FreeSans24pt7b.h"
+#include "fonts/FreeSansBold6pt7b.h"
+#include "fonts/FreeSansBold7pt7b.h"
 #include "fonts/FreeSansBold9pt7b.h"
 #include "fonts/FreeSansBold12pt7b.h"
 #include "fonts/FreeSansBold18pt7b.h"
@@ -23,31 +27,42 @@ static void writePGM(const std::string& path, const HostGFX& g) {
 }
 
 int main() {
-  atmo::FontSet F{&FreeSans9pt7b,      &FreeSansBold9pt7b,  &FreeSans12pt7b,
-                  &FreeSansBold12pt7b, &FreeSans18pt7b,     &FreeSansBold18pt7b,
-                  &FreeSans24pt7b,     &FreeSansBold24pt7b};
+  atmo::FontSet F{&FreeSans6pt7b,      &FreeSansBold6pt7b,  &FreeSans7pt7b,
+                  &FreeSansBold7pt7b,  &FreeSans9pt7b,      &FreeSansBold9pt7b,
+                  &FreeSans12pt7b,     &FreeSansBold12pt7b, &FreeSans18pt7b,
+                  &FreeSansBold18pt7b, &FreeSans24pt7b,     &FreeSansBold24pt7b};
 
-  atmo::DayView days[6] = {{"Wed", 51, 92, 65, 68}, {"Thu", 95, 86, 65, 65},
-                           {"Fri", 3, 80, 58, 6},   {"Sat", 53, 85, 66, 62},
-                           {"Sun", 1, 76, 62, 12},  {"Mon", 71, 41, 30, 80}};
-  // Sample next-24h temperatures (a gentle day curve).
-  int hourly[24] = {72, 71, 70, 69, 68, 68, 69, 72, 76, 80, 84, 87,
-                    90, 92, 92, 91, 89, 86, 82, 79, 77, 75, 74, 73};
-  atmo::WeatherView v{"Evanston", "Wed Nov 3", "Drizzle", 77, 51,
-                      days,       6,           hourly,    24};
+  // days[0] is today; the forecast strip renders the days ahead (from days[1]).
+  atmo::DayView days[6] = {{"Wed", 51, 21, 17, 68}, {"Thu", 0, 21, 14, 65},
+                           {"Fri", 3, 23, 15, 6},   {"Sat", 63, 24, 16, 62},
+                           {"Sun", 1, 19, 12, 12},  {"Mon", 1, 20, 13, 80}};
+  // Sample next-24h temperature and precip probability (%) starting at 9:00 — a
+  // warm dry morning, a cooler wet afternoon/evening. Index 15 is local midnight.
+  int temp[24] = {21, 22, 23, 24, 24, 23, 22, 21, 20, 19, 19, 18,
+                  18, 17, 17, 16, 16, 17, 18, 19, 20, 21, 22, 22};
+  int precip[24] = {0,  0,  5,  10, 20, 35, 55, 75, 80, 65, 45, 30,
+                    20, 15, 10, 5,  10, 20, 35, 25, 15, 10, 5,  0};
+  atmo::WeatherView v{"Evanston", "Wed Jun 10", "9:53", "Clear", 21, 0,
+                      days,       6,            temp,   precip,  24, 9,
+                      6,          20};  // sunrise 6am, sunset 8pm
 
   struct Screen { const char* name; int w; int h; };
   Screen screens[] = {{"t5_296x128", 296, 128},
                       {"ws_200x200", 200, 200},
-                      {"big_800x480", 800, 480},
                       {"portrait_128x296", 128, 296}};
+  struct Style { const char* name; atmo::LayoutStyle style; };
+  Style styles[] = {{"dashboard", atmo::LayoutStyle::Dashboard},
+                    {"horizon", atmo::LayoutStyle::Horizon}};
 
-  for (const Screen& s : screens) {
-    HostGFX g(s.w, s.h);
-    atmo::renderWeather(g, v, F);
-    std::string path = std::string("/tmp/atmo_") + s.name + ".pgm";
-    writePGM(path, g);
-    printf("wrote %s (%dx%d)\n", path.c_str(), s.w, s.h);
+  for (const Style& st : styles) {
+    for (const Screen& s : screens) {
+      HostGFX g(s.w, s.h);
+      atmo::renderWeather(g, v, F, st.style);
+      std::string path =
+          std::string("/tmp/atmo_") + st.name + "_" + s.name + ".pgm";
+      writePGM(path, g);
+      printf("wrote %s (%dx%d)\n", path.c_str(), s.w, s.h);
+    }
   }
   return 0;
 }

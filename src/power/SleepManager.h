@@ -16,12 +16,21 @@ class SleepManager {
   // marks settings invalid when the dedicated setup pad was touched.
   WakeReason checkWakeReason(Display& display, Settings& settings);
 
-  // Sets the system clock from a UTC epoch and records drift vs. the last sleep.
-  void setClockAndCompensate(time_t utcEpoch);
+  // Sets the system (RTC) clock from a UTC epoch. The ESP32 RTC keeps running
+  // through deep sleep, so the time stays correct across hourly cached redraws.
+  void setClock(time_t utcEpoch);
 
-  // Powers down peripherals and sleeps until the next refresh (timer + touch).
-  // Never returns: the device resumes from setup() on the next wake.
-  [[noreturn]] void deepSleep(Display& display, Settings& settings);
+  // True once the clock has been set to a real time (survives deep sleep).
+  bool clockValid();
+
+  // Current UTC epoch from the RTC (0/garbage until setClock has run).
+  time_t currentUtc();
+
+  // Powers down peripherals and sleeps until the top of the next hour (so the
+  // clock on screen is redrawn each hour). utcOffsetSeconds aligns the wake to
+  // local time. Never returns: the device resumes from setup() on the next wake.
+  [[noreturn]] void deepSleep(Display& display, Settings& settings,
+                              long utcOffsetSeconds);
 
   // Like deepSleep but uses the shorter retry interval after a failed update.
   // Drift compensation is reset since we have no fresh server time.

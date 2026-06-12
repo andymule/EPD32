@@ -14,13 +14,14 @@ panel.
 ```bash
 cd tools/preview
 g++ -std=c++17 -O2 -I. -o /tmp/atmo_preview preview.cpp
-/tmp/atmo_preview                      # writes /tmp/atmo_*.pgm
-python3 pgm2png.py /tmp/atmo_t5_296x128.pgm /tmp/atmo_t5_296x128.png
+/tmp/atmo_preview                      # writes /tmp/atmo_<style>_<size>.pgm
+python3 pgm2png.py /tmp/atmo_horizon_portrait_128x296.pgm out.png
 ```
 
-`preview.cpp` renders the layout at several panel sizes (296x128, 200x200,
-800x480) with sample data. Edit the sample `WeatherView` there to preview other
-conditions/values.
+`preview.cpp` renders **both layouts** (`horizon` and `dashboard`) at the panel
+sizes we target (296x128 landscape, 200x200 square, 128x296 portrait) with sample
+data, so the outputs are named `/tmp/atmo_<style>_<size>.pgm`. Edit the sample
+`WeatherView` in `preview.cpp` to preview other conditions/values.
 
 ## Files
 

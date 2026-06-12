@@ -7,6 +7,7 @@
 #include "Config.h"
 #include "Log.h"
 #include "display/Display.h"
+#include "model/ForecastCache.h"
 #include "settings/Settings.h"
 
 namespace {
@@ -148,7 +149,27 @@ void SetupPortal::handleExit() {
   if (server_.hasArg("n")) settings_->setSsid(server_.arg("n"));
   if (server_.hasArg("p")) settings_->setPassword(server_.arg("p"));
   if (server_.hasArg("metric")) settings_->setUseMetric(server_.arg("metric") == "true");
+  if (server_.hasArg("style")) {
+    int s = server_.arg("style").toInt();
+    settings_->setLayoutStyle((s == 0) ? 0 : 1);
+  }
+  if (server_.hasArg("rot")) {
+    int r = server_.arg("rot").toInt();
+    if (r < 0 || r > 3) r = display_defaults::ROTATION;
+    settings_->setRotation((uint8_t)r);
+  }
+  auto hourArg = [&](const char* key, uint8_t fallback) -> uint8_t {
+    if (!server_.hasArg(key)) return fallback;
+    int h = server_.arg(key).toInt();
+    return (h >= 0 && h <= 23) ? (uint8_t)h : fallback;
+  };
+  settings_->setFetchHour(hourArg("fetchHour", sched_defaults::FETCH_HOUR));
+  settings_->setQuietStart(hourArg("qStart", sched_defaults::QUIET_START));
+  settings_->setQuietEnd(hourArg("qEnd", sched_defaults::QUIET_END));
   settings_->setValid(false);
+  // Drop any cached forecast so the next boot does a full fetch (picks up a unit,
+  // location, or network change immediately instead of at the daily refresh).
+  cache::invalidate();
 
   server_.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server_.send(200, "text/html", "");
@@ -203,6 +224,29 @@ void SetupPortal::sendCommonHead() {
 
 void SetupPortal::sendValue(const String& value) {
   if (value.length()) server_.sendContent(value);
+}
+
+void SetupPortal::streamOption(int value, const char* label, int current) {
+  server_.sendContent(F("<option value="));
+  server_.sendContent(String(value));
+  if (value == current) server_.sendContent(F(" selected"));
+  server_.sendContent(F(">"));
+  server_.sendContent(label);
+  server_.sendContent(F("</option>"));
+}
+
+void SetupPortal::streamHourSelect(const char* name, int current) {
+  server_.sendContent(F("<select name="));
+  server_.sendContent(name);
+  server_.sendContent(F(">"));
+  for (int h = 0; h < 24; h++) {
+    int h12 = h % 12;
+    if (h12 == 0) h12 = 12;
+    char lbl[8];
+    snprintf(lbl, sizeof(lbl), "%d %s", h12, h < 12 ? "AM" : "PM");
+    streamOption(h, lbl, current);
+  }
+  server_.sendContent(F("</select>"));
 }
 
 void SetupPortal::streamNetworkOptions() {
@@ -262,7 +306,34 @@ void SetupPortal::streamConfigHtml() {
           "<label><input type=radio name=metric value=true> &deg;C</label>"));
   }
 
+  server_.sendContent(F("</div>"));  // close the units row
+
+  int style = settings_->layoutStyle();
+  server_.sendContent(F("<label for=style>Layout</label>"
+                        "<select id=style name=style>"));
+  streamOption(1, "Horizon", style);
+  streamOption(0, "Dashboard", style);
+  server_.sendContent(F("</select>"));
+
+  int rot = settings_->rotation();
+  server_.sendContent(F("<label for=rot>Orientation</label>"
+                        "<select id=rot name=rot>"));
+  streamOption(0, "Portrait", rot);
+  streamOption(2, "Portrait (flipped)", rot);
+  streamOption(1, "Landscape", rot);
+  streamOption(3, "Landscape (flipped)", rot);
+  server_.sendContent(F("</select>"));
+
+  server_.sendContent(F("<label>Daily update time</label>"));
+  streamHourSelect("fetchHour", settings_->fetchHour());
+
+  server_.sendContent(F("<label>Quiet hours (pause hourly updates)</label>"
+                        "<div class=row>"));
+  streamHourSelect("qStart", settings_->quietStart());
+  streamHourSelect("qEnd", settings_->quietEnd());
+  server_.sendContent(F("</div>"));
+
   server_.sendContent(
-      F("</div><button type=submit>Save &amp; restart</button>"
+      F("<button type=submit>Save &amp; restart</button>"
         "</form></div></body></html>"));
 }

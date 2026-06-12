@@ -31,13 +31,13 @@ constraint, and that single requirement eliminates several "obvious" boards.
 | --- | --- | --- |
 | MCU | Classic ESP32 (`board = esp32dev`) | `platformio.ini` |
 | Panel | 2.9" B/W via GxEPD2 (`GxEPD2_290`, ~296×128, SSD1680‑class) | `src/display/Display.h` |
-| Power | Battery + deep sleep, ~daily wake, drift compensation in RTC mem | `src/power/SleepManager.cpp` |
-| Wake | ESP32 **native touch pads** (`touchAttachInterrupt` + `esp_sleep_enable_touchpad_wakeup`), T5/GPIO12 = refresh, T3/GPIO15 = setup | `include/Config.h`, `src/power/SleepManager.cpp` |
+| Power | Battery + deep sleep; once-daily network fetch + hourly cached clock redraws (paused during quiet hours); forecast cached in RTC mem | `src/power/SleepManager.cpp`, `src/model/ForecastCache.cpp` |
+| Wake | **ext1 button wake** (`esp_sleep_enable_ext1_wakeup`), GPIO37 = refresh; GPIO39 held at boot/wake = setup portal | `include/Config.h`, `src/power/SleepManager.cpp` |
 
-Everything except the touch‑pad wake is portable. The touch‑pad wake is the only
-genuinely board‑specific piece of code — and it has to be rewritten regardless of
-the target, because almost every integrated e‑paper board exposes physical
-buttons (EXT0/EXT1 wake) rather than native touch pads.
+Wake is already implemented with a generic **ext1 button interrupt** (not native
+touch pads), so it ports cleanly to any board that exposes a physical wake button
+— there is no board-specific wake code left to rewrite. Everything else is
+standard ESP32 + GxEPD2 and is portable as-is.
 
 ---
 
@@ -283,6 +283,12 @@ needs re‑proportioning — a separate cosmetic pass.
 
 ### 7.5 `src/power/SleepManager.cpp` — button wake instead of touch pads
 
+> **Note (current code):** this migration is already done — `SleepManager` uses
+> ext1 button wake (`enableWakeSources()`), and `Config.h` defines `WAKE_BUTTON =
+> GPIO37` / `SETUP_BUTTON = GPIO39` (no touch pads, no drift compensation). For a
+> new board, just retarget the GPIO numbers. The snippet below is kept as the
+> reference pattern.
+
 Replace `enableTouchWake()` / `wakeupTouchGpio()` (classic‑ESP32 touch) with EXT1
 wake using a two‑button bitmask (keeps the refresh‑vs‑setup distinction).
 
@@ -310,8 +316,8 @@ Then:
 - In `checkWakeReason`, the `ESP_SLEEP_WAKEUP_TOUCHPAD` branch becomes
   `ESP_SLEEP_WAKEUP_EXT1`, mapping `WAKE_SETUP_GPIO → EnterSettings`, else
   `RefreshNow`.
-- Everything else — timer wake, drift compensation, `RTC_DATA_ATTR` state — is
-  chip‑agnostic and carries over unchanged.
+- Everything else — timer wake, the hourly + quiet-hours schedule, and
+  `RTC_DATA_ATTR` state — is chip‑agnostic and carries over unchanged.
 - Optional: after `display.hibernate()`, drive `EPD_PWR` LOW. E‑paper retains its
   image with the rail off, saving sleep current.
 

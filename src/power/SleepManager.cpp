@@ -4,6 +4,8 @@
 #include <TimeLib.h>
 #include <esp_sleep.h>
 #include <string.h>
+#include <sys/time.h>
+#include <time.h>
 
 #include "Config.h"
 #include "Log.h"
@@ -11,11 +13,23 @@
 #include "esp32/ulp.h"
 #include "settings/Settings.h"
 
-// Drift-compensation state, preserved across deep sleep in RTC memory.
-RTC_DATA_ATTR static bool sleepDriftWasTooFast = false;
-RTC_DATA_ATTR static uint64_t sleepDriftCompensation = 0;
-RTC_DATA_ATTR static time_t lastServerTime = 0;
-RTC_DATA_ATTR static uint64_t lastSleepDuration = 0;
+namespace {
+// Any epoch beyond this means the RTC has been set to a real time (2020-01-20).
+constexpr time_t kClockValidAfter = 1579461559;
+
+// Quiet window [qs, qe): hourly redraws pause. qs == qe disables it. Wraps
+// midnight when qs > qe.
+bool isQuietHour(int h, int qs, int qe) {
+  if (qs == qe) return false;
+  return qs < qe ? (h >= qs && h < qe) : (h >= qs || h < qe);
+}
+
+// A wake at local hour h is allowed if it's outside quiet hours, or it's the
+// daily fetch hour (which must always fire, even inside the quiet window).
+bool wakeAllowed(int h, int qs, int qe, int fetchHour) {
+  return !isQuietHour(h, qs, qe) || h == fetchHour;
+}
+}  // namespace
 
 // Number of consecutive failed updates, used to back the retry interval off
 // exponentially. Survives deep sleep; reset to zero after any successful update.
@@ -24,27 +38,19 @@ RTC_DATA_ATTR static uint32_t consecutiveFailures = 0;
 // True while the e-paper is showing a good weather frame (survives deep sleep).
 RTC_DATA_ATTR static bool screenShowsWeather = false;
 
-void SleepManager::setClockAndCompensate(time_t utcEpoch) {
-  setTime(utcEpoch);
-
-  // Drift = actual elapsed time vs. the duration we intended to sleep for.
-  const time_t JAN_20_2020 = 1579461559;
-  if (lastServerTime > JAN_20_2020 && lastSleepDuration > 0) {
-    int64_t actualElapsedSec = static_cast<int64_t>(utcEpoch - lastServerTime);
-    int64_t intendedElapsedSec =
-        static_cast<int64_t>(lastSleepDuration / timing::ONE_SECOND_US);
-    int64_t driftSeconds = actualElapsedSec - intendedElapsedSec;
-    sleepDriftWasTooFast = (driftSeconds < 0);
-    if (sleepDriftWasTooFast) driftSeconds *= -1;
-    sleepDriftCompensation = static_cast<uint64_t>(driftSeconds) * timing::ONE_SECOND_US;
-  } else {
-    // No usable baseline (first run, or after a retry reset). Clear any prior
-    // compensation so the next full sleep isn't skewed by a stale value.
-    sleepDriftWasTooFast = false;
-    sleepDriftCompensation = 0;
-  }
-  lastServerTime = utcEpoch;
+void SleepManager::setClock(time_t utcEpoch) {
+  // settimeofday drives the ESP32 RTC, which keeps ticking through deep sleep,
+  // so time(nullptr) stays correct on later (network-free) hourly wakes.
+  struct timeval tv;
+  tv.tv_sec = utcEpoch;
+  tv.tv_usec = 0;
+  settimeofday(&tv, nullptr);
+  setTime(utcEpoch);  // keep TimeLib in sync for any of its consumers
 }
+
+bool SleepManager::clockValid() { return time(nullptr) > kClockValidAfter; }
+
+time_t SleepManager::currentUtc() { return time(nullptr); }
 
 void SleepManager::enableWakeSources() {
   // Wake button (active-low) via ext1. ext1 is chosen over ext0/touch because it
@@ -62,7 +68,12 @@ bool SleepManager::setupButtonHeld() {
   return digitalRead(pins::SETUP_BUTTON) == LOW;
 }
 
-[[noreturn]] void SleepManager::deepSleep(Display& display, Settings& settings) {
+[[noreturn]] void SleepManager::deepSleep(Display& display, Settings& settings,
+                                          long utcOffsetSeconds) {
+  // Read schedule settings before closing the NVS handle.
+  const int fetchHour = settings.fetchHour();
+  const int quietStart = settings.quietStart();
+  const int quietEnd = settings.quietEnd();
   settings.end();
   display.hibernate();
   SPI.end();
@@ -73,13 +84,32 @@ bool SleepManager::setupButtonHeld() {
 
   enableWakeSources();
 
-  uint64_t sleepTime;
-  if (sleepDriftWasTooFast)
-    sleepTime = timing::REFRESH_INTERVAL_US + sleepDriftCompensation;
-  else
-    sleepTime = timing::REFRESH_INTERVAL_US - sleepDriftCompensation;
+  // Wake at the top of the next *allowed* local hour so the on-screen clock is
+  // redrawn hourly from cached data — but skip the quiet window (e.g. 10pm-5am),
+  // except for the daily fetch hour which always fires. Fall back to a flat hour
+  // if the clock isn't set yet.
+  uint64_t sleepTime = timing::ONE_HOUR_US;
+  time_t nowUtc = time(nullptr);
+  if (nowUtc > kClockValidAfter) {
+    long localNow = static_cast<long>(nowUtc) + utcOffsetSeconds;
+    long sod = ((localNow % 86400) + 86400) % 86400;  // seconds into local day
+    int curHour = static_cast<int>(sod / 3600);
+    long intoHour = sod % 3600;
+    // Walk forward to the next allowed hour and wake at its :00. (No "skip the
+    // almost-here boundary" shortcut: it could skip the fetch hour if we woke a
+    // few seconds early, and wakes already target :00 so it rarely applied.)
+    int hoursAhead = 1;
+    for (int k = 1; k <= 24; k++) {
+      if (wakeAllowed((curHour + k) % 24, quietStart, quietEnd, fetchHour)) {
+        hoursAhead = k;
+        break;
+      }
+    }
+    long secsToTarget = static_cast<long>(hoursAhead) * 3600 - intoHour;
+    if (secsToTarget < 1) secsToTarget = 1;
+    sleepTime = static_cast<uint64_t>(secsToTarget) * timing::ONE_SECOND_US;
+  }
 
-  lastSleepDuration = sleepTime;
   esp_sleep_enable_timer_wakeup(sleepTime);
   esp_deep_sleep_start();
 }
@@ -100,10 +130,6 @@ bool SleepManager::setupButtonHeld() {
     retryTime = timing::MAX_RETRY_INTERVAL_US;
   if (consecutiveFailures < UINT32_MAX) consecutiveFailures++;
 
-  // No fresh server time on a failure, so reset the drift baseline rather than
-  // computing bogus drift across the (short) retry sleep on the next success.
-  lastServerTime = 0;
-  lastSleepDuration = retryTime;
   esp_sleep_enable_timer_wakeup(retryTime);
   esp_deep_sleep_start();
 }

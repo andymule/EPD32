@@ -24,6 +24,10 @@ class SetupPortal {
   void scanNetworks();
   // Streams the <option> list of the cached nearby networks.
   void streamNetworkOptions();
+  // Streams a single <option value=N[ selected]>label</option>.
+  void streamOption(int value, const char* label, int current);
+  // Streams a <select name=...> of all 24 hours (12h labels), `current` chosen.
+  void streamHourSelect(const char* name, int current);
   // Streams a dynamic field value, skipping empties (an empty chunked
   // sendContent would prematurely terminate the response).
   void sendValue(const String& value);

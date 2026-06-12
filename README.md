@@ -1,8 +1,9 @@
 # EPD32 / Atmo
 
-A low-power ESP32 e-paper weather display. It wakes once a day (or on a touch
-tap), fetches the local forecast over WiFi, renders it to a 2.9" black/white
-e-paper panel, and goes back into deep sleep.
+A low-power ESP32 e-paper weather display. It fetches the local forecast over
+WiFi once a day, caches it, then wakes briefly each hour to redraw the clock from
+the cached data and deep-sleeps in between. A button press triggers an immediate
+refresh. It renders to a 2.9" black/white e-paper panel in one of two layouts.
 
 ## Building (PlatformIO)
 
@@ -35,20 +36,46 @@ Dependencies are declared in `platformio.ini` and fetched automatically:
 
 ## First-time setup
 
-On first boot (or after touching the setup pad) the device hosts a WiFi access
-point named **Atmo**. Connect to it and browse to **at.mo** to enter your WiFi
-credentials and choose units. Credentials are submitted over a POST form (never
-in the URL) and stored in NVS.
+On first boot (or while holding the setup button during boot/wake) the device
+hosts a WiFi access point named **Atmo**. Connect to it and browse to **at.mo**
+to configure:
+
+- WiFi network + password
+- Units (°F / °C)
+- Layout (Horizon / Dashboard)
+- Orientation (portrait / landscape, normal or flipped)
+- Daily update time (the local hour of the once-a-day network fetch)
+- Quiet hours (a window when the hourly clock redraws pause)
+
+Settings are submitted over a POST form (never in the URL) and stored in NVS.
 
 ## Refresh behavior
 
-The display wakes once a day, fetches the forecast, renders it, and deep-sleeps.
-If an update fails (WiFi or network hiccup) it keeps the last good frame on
-screen and retries within an hour instead of going dark for a full day. Repeated
-failures back the retry off exponentially (1h, 2h, 4h, ... capped at a day) so a
-prolonged outage doesn't drain the battery with hourly radio wake-ups. Press the
-wake button for an immediate refresh, or hold the setup button during boot/wake
-to reconfigure.
+The device fetches the forecast over WiFi once a day (default 5am, configurable),
+caches it in RTC memory, and renders it. In between it wakes at the top of each
+hour to redraw the clock and the rolling 24-hour curve from the cached data (no
+radio), then deep-sleeps. During the configurable **quiet hours** (default
+10pm–5am) the hourly redraws pause and the device sleeps straight through — the
+daily fetch still runs even if it falls inside that window.
+
+Press the **wake button** for an immediate fetch + refresh, or hold the **setup
+button** during boot/wake to reconfigure. If an update fails and there is no
+cached frame to show, the device displays a brief error and retries with an
+exponential backoff (1h, 2h, 4h, … capped at a day); if a cached frame already
+exists it keeps showing it and tries again at the next daily fetch.
+
+## Layouts & animations
+
+Two resolution-independent layouts (selectable in setup):
+
+- **Horizon** — a big hero icon + current temp with today's hi/lo, a smooth 24h
+  temperature curve with dotted precipitation and sun/moon/sunrise/sunset marks,
+  and a high-only day strip.
+- **Dashboard** — header + hero block + precipitation trend + daily strip.
+
+A first-boot splash ("Atmo" + a raining cloud) and an update cue (the current
+hero icon sliding away on a button refresh) animate on a second core while the
+network work runs on the main core, so they never delay the new frame.
 
 ## External services
 
@@ -60,20 +87,20 @@ Both services are keyless (no signup or API key required):
 ## Project layout
 
 ```
-platformio.ini        Build configuration
-include/Config.h       Pins, timeouts, NVS keys, API endpoints
-include/Log.h          Serial logging macros (compiled out without DEBUG_BUILD)
+platformio.ini             Build configuration
+include/Config.h           Pins, timeouts, NVS keys, API endpoints, schedule defaults
+include/Log.h              Serial logging macros (compiled out without DEBUG_BUILD)
+include/fonts/             Generated GFX fonts (FreeSans 6/7pt + oblique tagline)
 include/Secrets.h.example  Optional dev-only WiFi creds template
-src/main.cpp           Orchestration (setup/loop)
-src/model/             Plain weather data structs
-src/settings/          Preferences (NVS) wrapper
-src/net/               WiFi, HTTP helper, geolocation + weather providers
-src/weather/           WMO weather-code -> text mapping
-src/display/           GxEPD2 wrapper + all rendering
-src/power/             Deep sleep, wake reason, clock-drift compensation
-src/setup/             Captive configuration portal
-lib/tk_spline/         Vendored cubic spline library (currently unused)
-assets/                Unused bitmap headers retained from earlier experiments
+src/main.cpp               Orchestration (setup/loop), update + animation flow
+src/model/                 Weather data structs + RTC-memory forecast cache
+src/settings/              Preferences (NVS) wrapper
+src/net/                   WiFi, HTTP helper, geolocation + weather providers
+src/weather/               WMO weather-code -> text mapping
+src/display/               GxEPD2 wrapper, the two layouts, and animations
+src/power/                 Deep sleep, wake reason, hourly + quiet-hours scheduling
+src/setup/                 Captive configuration portal
+tools/preview/             Desktop harness to render the layouts to PNG (see its README)
 ```
 
 ## Hardware
