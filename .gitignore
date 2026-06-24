@@ -1,5 +1,7 @@
 # PlatformIO build output
 .pio/
+.pioenvs/
+.piolibdeps/
 
 # Local development secrets (copied from include/Secrets.h.example)
 include/Secrets.h
@@ -8,9 +10,21 @@ include/Secrets.h
 .vs/
 .vscode/
 .idea/
+*.swp
+*~
 
 # macOS
 .DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Preview harness: generated renders + locally-built binary (tools/preview).
+# Note: case/*.png and case/*.stl are intentionally committed, so don't blanket
+# ignore those extensions here.
+tools/preview/out/
+tools/preview/atmo_preview
+*.pgm
 
 # Build / temp artifacts
 *.o
