@@ -1,392 +1,462 @@
-# E‑Paper Dev Board Migration — Research & Porting Plan
+# Board Migration — Lilygo T5 v2.2 → Waveshare ESP32‑S3‑Touch‑ePaper‑1.54
 
-> Status: **planning only** (no code changes applied yet).
-> Goal: move the Atmo weather display off the Lilygo T5 v2.2 onto a board that
-> better supports the priorities below, with a clear porting path.
-
----
-
-## 1. Priorities (as stated)
-
-In rough priority order:
-
-1. **Correctly‑wired e‑ink so it can be driven from the ULP** — i.e. refresh the
-   panel while the main CPU cores are in deep sleep.
-2. **Onboard battery charging.**
-3. **Correct deep sleep + wake.**
-4. **Good power management** (PMIC quality).
-5. **RTC** — nice to have, not required.
-
-Explicitly *not* important: native buttons / touch integration. Buttons and
-touchpads are trivial to add later; the items above are not.
-
-This reordering matters: it makes the **ULP‑drivable e‑ink** the binding
-constraint, and that single requirement eliminates several "obvious" boards.
+> Status: **implemented** — USB and battery. Atmo runs on the Waveshare board
+> via the `s3_touch` PlatformIO env (the original T5 build is untouched),
+> including the battery power latch (§3.1), panel/touch power management, and
+> deep‑sleep wake. All hardware facts below are grounded in Waveshare's wiki and
+> its official demo source:
+> [docs.waveshare.com/ESP32‑S3‑ePaper‑1.54](https://docs.waveshare.com/ESP32-S3-ePaper-1.54)
+> and [github.com/waveshareteam/ESP32‑S3‑ePaper‑1.54](https://github.com/waveshareteam/ESP32-S3-ePaper-1.54).
+>
+> Re‑flashing note: the firmware deep‑sleeps, which drops the USB‑Serial/JTAG
+> port — see §8.1 for the BOOT‑button download‑mode procedure required to reflash.
 
 ---
 
-## 2. What the current code depends on
+## 1. The board
 
-| Area | Detail | Source |
-| --- | --- | --- |
-| MCU | Classic ESP32 (`board = esp32dev`) | `platformio.ini` |
-| Panel | 2.9" B/W via GxEPD2 (`GxEPD2_290`, ~296×128, SSD1680‑class) | `src/display/Display.h` |
-| Power | Battery + deep sleep; once-daily network fetch + hourly cached clock redraws (paused during quiet hours); forecast cached in RTC mem | `src/power/SleepManager.cpp`, `src/model/ForecastCache.cpp` |
-| Wake | **ext1 button wake** (`esp_sleep_enable_ext1_wakeup`), GPIO37 = refresh; GPIO39 held at boot/wake = setup portal | `include/Config.h`, `src/power/SleepManager.cpp` |
+Waveshare's "ESP32‑S3‑ePaper‑1.54" is a small e‑paper AIoT dev board family. Per
+the wiki there are four SKUs (touch and battery are the two options):
 
-Wake is already implemented with a generic **ext1 button interrupt** (not native
-touch pads), so it ports cleanly to any board that exposes a physical wake button
-— there is no board-specific wake code left to rewrite. Everything else is
-standard ESP32 + GxEPD2 and is portable as-is.
+| SKU | Product | Touch | Battery |
+| --- | --- | --- | --- |
+| 32298 | ESP32‑S3‑ePaper‑1.54 | no | yes |
+| 32299 | ESP32‑S3‑ePaper‑1.54‑EN | no | no |
+| **34211** | **ESP32‑S3‑Touch‑ePaper‑1.54** | **yes** | **yes** |
+| 34212 | ESP32‑S3‑Touch‑ePaper‑1.54‑EN | yes | no |
 
----
+**This project targets SKU 34211** (FT6336 capacitive touch + onboard Li‑ion
+charging).
 
-## 3. The ULP constraint (why this drives the whole decision)
+### Hardware revisions (matters for flash/PSRAM)
 
-To refresh an e‑paper panel from the ULP while the main cores sleep, **two**
-things must both be true:
+The wiki calls out two PCB revisions; they are **not** program‑interchangeable:
 
-### 3.1 The chip needs a capable ULP
+- **V1** — `ESP32‑S3FH4R2`, 4 MB flash + 2 MB PSRAM.
+- **V2** — `ESP32‑S3‑PICO‑1‑N8R8`, 8 MB flash + 8 MB PSRAM, plus optimized
+  whole‑board sleep power. Phased in from 2025‑11‑01; marked "V2" on the back /
+  top‑left silkscreen.
 
-- **Classic ESP32** has only the **ULP‑FSM** — a tiny assembly state machine, no
-  practical bit‑banged SPI. Not viable for driving a panel.
-- **ESP32‑S3** has the **ULP‑RISC‑V** — programmable in C, ~17.5 MHz, can stay
-  powered in deep sleep, and can access RTC GPIO / RTC I²C / SAR ADC. This is the
-  variant people actually bit‑bang SPI with.
-- There is **no SPI peripheral exposed to the ULP on any ESP32**. ULP "SPI" is
-  always GPIO bit‑bang, and Espressif provides **no official API/example** for
-  it. The Arduino framework only exposes the weak ULP‑FSM, so the ULP‑RISC‑V path
-  effectively means **ESP‑IDF**, not Arduino.
+**The unit on hand is V2.** `esptool` confirms it: `ESP32‑S3‑PICO‑1 (LGA56)
+rev v0.2`, `Embedded Flash 8MB (GD)` (eFuse flash type **quad**), `Embedded
+PSRAM 8MB`, native **USB‑Serial/JTAG**.
 
-### 3.2 Every EPD control pin must be on an RTC‑capable GPIO
+### Panel
 
-Only the RTC IO domain stays alive in deep sleep, so the ULP can only toggle
-RTC GPIOs. The panel needs **CS, DC, RST, BUSY, SCK, MOSI** (and ideally the
-panel power‑enable) all on RTC pins.
-
-- **Classic ESP32** RTC GPIOs are a *sparse* set: 0, 2, 4, 12–15, 25–27, 32–39.
-- **ESP32‑S3** RTC GPIOs are a *contiguous* range: **GPIO0–GPIO21** — much easier
-  to satisfy.
-
-> **Key finding:** the current Lilygo T5 v2.2 **cannot** do ULP e‑ink. Its SPI
-> pins are GPIO5/18/19/23, none of which are RTC‑capable on classic ESP32. So
-> this goal *requires* a board change no matter what.
-
-### 3.3 SPI panel ≫ parallel panel for this goal
-
-A SPI e‑paper (a handful of lines) is tractable to bit‑bang from the ULP. A
-parallel/EPDiy panel (8 data lines + multiple clock/control lines, often routed
-above GPIO21) is effectively impossible. **Prefer SPI panels.** This rules out
-the big 4.7" parallel boards.
+1.54" **200×200 black/white**, SPI, controller **GDEY0154D67** (SSD1681 class).
+In GxEPD2 this is `GxEPD2_154_D67`.
 
 ---
 
-## 4. Board evaluation
+## 2. Pin map (from the Waveshare wiki GPIO table)
 
-### 4.1 LilyGo T5 E‑Paper S3 Pro — rejected (despite best PMIC)
+ESP32‑S3 RTC‑capable GPIOs are the contiguous range **GPIO0–GPIO21**. Every EPD
+line below is inside that range, which is what makes a future ULP‑driven refresh
+even theoretically possible (see §7).
 
-- ESP32‑S3 (good ULP), and the **best power hardware** of anything surveyed:
-  BQ25896 I²C charger + **BQ27220 fuel gauge** + TPS65185 EPD PMIC + PCF85063 RTC.
-- **But** the panel is a 4.7" **ED047TC1 parallel** display (EPDiy, not GxEPD2),
-  with control lines on GPIO41/42/45/48 — *outside* the RTC range and a parallel
-  interface. **ULP‑hostile**, and it forces a full display rewrite.
-- Verdict: gorgeous power management, wrong panel for the #1 requirement. **Skip.**
+### E‑paper (SPI) + touch
 
-### 4.2 Waveshare ESP32‑S3‑ePaper‑1.54 / 1.54G — RECOMMENDED ✓
+| Signal | GPIO | In RTC range (0–21)? | Notes |
+| --- | --- | --- | --- |
+| **EPD_PWR** (EPD3V3_EN) | 6 | ✓ | Panel rail enable — **ACTIVE‑LOW**, see §3 |
+| EPD_BUSY | 8 | ✓ | busy = HIGH |
+| EPD_RST | 9 | ✓ | |
+| EPD_DC | 10 | ✓ | |
+| EPD_CS | 11 | ✓ | |
+| EPD_SCLK | 12 | ✓ | |
+| EPD_SDI (MOSI) | 13 | ✓ | panel is write‑only; no MISO |
+| EPD_TP_RST | 7 | ✓ | FT6336 touch reset |
+| EPD_TP_INT | 21 | ✓ | FT6336 touch interrupt |
+| EPD_TP I²C | SDA 47 / SCL 48 | ✗ | shared I²C bus (see below) |
 
-- ESP32‑S3 (ULP‑RISC‑V), **SPI** 1.54" 200×200 B/W panel.
-- Onboard LiPo charging (ETA6098) + MP1605 3.3V buck, PCF85063 RTC, SHTC3
-  temp/humidity (free win for a weather display).
-- **Every EPD pin is verified inside GPIO0–21** (see §5). Even battery sense is on
-  an RTC ADC pin, so the ULP could read battery voltage too.
-- Only board where the make‑or‑break requirement is *provably* satisfied.
-
-### 4.3 Waveshare ESP32‑S3‑ePaper‑3.97 — strong "bigger screen" alternative
-
-- ESP32‑S3, **SPI** 3.97" **800×480** panel with 4‑gray + partial refresh
-  (driver `EPD_3IN97_*`, confirmed SPI style).
-- Better PMIC (**TG28**, configurable rails + charging), plus PCF85063 RTC, SHTC3,
-  QMI8658 IMU, rotary encoder, much roomier dashboard.
-- **Caveat:** Waveshare's 3.97" page omits the GPIO table; the EPD pin block
-  (commonly 8–13 across these S3 boards) was **not** confirmable from a primary
-  source. Verify the EPD GPIOs land in 0–21 against the board schematic before
-  committing.
-
----
-
-## 5. Pin verification (Waveshare ESP32‑S3‑ePaper‑1.54 / 1.54G)
-
-From Waveshare's official GPIO table. **ESP32‑S3 RTC‑capable range = GPIO0–21.**
-
-| EPD signal | GPIO | In RTC range? |
-| --- | --- | --- |
-| EPD_PWR (3V3 enable) | 6 | ✓ |
-| EPD_BUSY | 8 | ✓ |
-| EPD_RST | 9 | ✓ |
-| EPD_DC | 10 | ✓ |
-| EPD_CS | 11 | ✓ |
-| EPD_SCLK | 12 | ✓ |
-| EPD_SDI (MOSI) | 13 | ✓ |
-
-All six control/SPI lines **and** the panel power‑enable are RTC GPIOs → the
-ULP‑RISC‑V can both bit‑bang the panel and gate its rail during deep sleep.
-
-Supporting pins:
+### Everything else (for reference)
 
 | Function | GPIO | Notes |
 | --- | --- | --- |
-| BAT_ADC | 4 | ADC1 / RTC — readable from ULP (VBAT = VADC × 2) |
-| RTC_INT (PCF85063) | 5 | RTC‑capable |
-| BAT_KEY / BAT_Control | 18 / 17 | PWR latch circuit |
-| RTC / SHTC3 I²C | SCL 48, SDA 47 | **Outside** RTC range — not ULP‑accessible |
-| TF card (SDIO) | 39/40/41 | — |
-| USB (native) | 19 (D‑), 20 (D+) | — |
-| UART0 | TX 43, RX 44 | — |
-| Charger | ETA6098 | single‑cell Li‑ion, charge‑only (no fuel gauge) |
-| 3.3V DC‑DC | MP1605 | — |
+| BOOT / Key1 | 0 | strapping pin; the only usable user button |
+| Reserved header | 1, 2, 3 | 2×6 expansion header |
+| BAT_ADC | 4 | VBAT = VADC × 2 (ADC1 / RTC) |
+| RTC_INT (PCF85063) | 5 | |
+| BAT_Control (VBAT_PWR) / BAT_KEY (PWR btn) | 17 / 18 | PWR soft‑latch — **GPIO17 must be held high on battery**, see §3.1 |
+| USB D‑ / D+ (native) | 19 / 20 | USB‑Serial/JTAG |
+| I²C bus (RTC + SHTC3 + ES8311 + touch) | SDA 47 / SCL 48 | **outside** RTC range |
+| Audio ES8311 (I²S) | MCLK 14, SCLK 15, ASDOUT 16, LRCK 38, DSDIN 45, PA_EN 42, PA_CTRL 46 | |
+| TF card (SDIO) | CLK 39, MISO 40, MOSI 41 | |
+| UART0 | TX 43, RX 44 | |
+| RTC | PCF85063ATL | I²C `0x51` |
+| Temp/Humidity | SHTC3 | I²C `0x70` |
+| Charger | ETA6098 | single‑cell Li‑ion |
+| 3.3V DC‑DC | MP1605 | |
 
-> Gotcha: the external RTC and SHTC3 are on I²C GPIO47/48, *outside* the RTC
-> domain, so the ULP can't read them mid‑sleep. That's fine — the ULP uses its
-> own timer + the EPD pins above; the RTC/sensor are for the main core only.
-
----
-
-## 6. Recommendation
-
-**Primary: Waveshare ESP32‑S3‑ePaper‑1.54** (1.54G panel, or the Touch version if
-you might want capacitive touch later).
-
-- The one must‑pass box (SPI panel, all EPD pins on RTC GPIOs incl. power‑enable)
-  is *provably* checked — uniquely so among surveyed boards.
-- Onboard charging + RTC + battery ADC on an RTC pin.
-- 200×200 ≈ 40k px — actually slightly more pixels than the current 296×128
-  (~38k), just square; layout reworks but the GxEPD2 driver path stays.
-
-**Step up only for the big screen:** ESP32‑S3‑ePaper‑3.97 — nicer PMIC and a far
-roomier 800×480 dashboard, still SPI/4‑gray. Confirm its EPD GPIOs from the
-schematic first.
-
-**Avoid:** LilyGo T5 S3 Pro for this goal (parallel panel, ULP‑hostile) despite
-its superior charger/fuel‑gauge.
+> The PCF85063 RTC, SHTC3, and FT6336 touch all sit on the I²C bus at GPIO47/48,
+> which is **outside** the RTC GPIO range — so none of them are reachable by the
+> ULP during deep sleep. That's fine: they're for the main core.
 
 ---
 
-## 7. Porting plan
+## 3. The EPD power‑enable gotcha (root cause of the first "blank screen")
 
-Designed so the **T5 build stays intact** — the Waveshare board is added as a
-second PlatformIO env, with board‑specific pins behind a `BOARD_WAVESHARE_S3_154`
-build flag.
+`EPD_PWR` / **GPIO6** (the wiki's `EPD3V3_EN`, "E‑Paper power switch / 3.3V
+supply enable") gates the panel's `EPD3V3` rail through an **AO3401 P‑channel
+high‑side MOSFET**. A P‑FET high‑side switch driven from the GPIO is
+**active‑LOW**:
 
-### 7.1 `platformio.ini` — add an S3 env
+- **GPIO6 = LOW → panel powered.**
+- GPIO6 = HIGH → panel display rail OFF.
 
-The shared `[env]` `lib_deps` are inherited; only the env below is new.
-
-```ini
-; Waveshare ESP32-S3-ePaper-1.54 (ESP32-S3-WROOM-1 N16R8, 200x200 SPI panel)
-[env:s3_154]
-platform = espressif32
-board = esp32-s3-devkitc-1
-board_build.mcu = esp32s3
-board_build.flash_size = 16MB
-board_build.arduino.memory_type = qio_opi   ; N16R8 = octal PSRAM
-board_build.partitions = min_spiffs.csv
-build_flags =
-	-DDEBUG_BUILD
-	-DBOARD_WAVESHARE_S3_154
-	-DARDUINO_USB_CDC_ON_BOOT=1   ; S3 logs over native USB
-	-DBOARD_HAS_PSRAM
-```
-
-`min_spiffs.csv` is a 4 MB layout; it works on the 16 MB part (leaves flash
-unused). Swap to a 16 MB scheme later for more OTA/SPIFFS room.
-
-### 7.2 `include/Config.h` — board‑specific pins
-
-Wrap the existing T5 `pins` namespace; select the S3 map by the flag.
+The trap: the panel's *digital* logic is powered from the always‑on 3V3 rail, so
+with GPIO6 HIGH the controller still boots, **`BUSY` still toggles, and refreshes
+still "complete"** (~1.29 s) — but the high‑voltage rail that physically moves
+the e‑paper is off, so the image never changes and the panel keeps showing its
+last frame. Confirmed two ways: with GPIO6 driven LOW the barebones test (§6)
+immediately rendered, **and** Waveshare's own demo BSP does the same —
 
 ```cpp
-namespace pins {
-#if defined(BOARD_WAVESHARE_S3_154)
-// Waveshare ESP32-S3-ePaper-1.54 — every EPD pin is in the RTC GPIO0–21 range.
-constexpr int EPD_PWR = 6;    // panel 3V3 rail enable (drive HIGH to power)
+// 02_Example/Arduino/11_RTC_Sleep_Test/src/power/board_power_bsp.cpp
+void POWEER_EPD_ON()  { gpio_set_level(epd_power_pin, 0); }  // LOW  = panel ON
+void POWEER_EPD_OFF() { gpio_set_level(epd_power_pin, 1); }  // HIGH = panel OFF
+```
+
+(Note: AI/web summaries that say "drive GPIO6 HIGH" are wrong for this board —
+they likely describe a different/older variant. The wiki warns example programs
+aren't interchangeable between V1/V2.)
+
+## 3.1 Battery power latch — GPIO17 (REQUIRED for battery; implemented)
+
+The board has a **soft power‑latch** for battery use, and the firmware must hold
+it. From Waveshare's demo (`board_power_bsp.cpp` + `user_app.cpp`):
+
+- `VBAT_PWR` / `BAT_Control` = **GPIO17**. `VBAT_POWER_ON()` drives it **HIGH**
+  to keep the battery rail latched on; `VBAT_POWER_OFF()` drives it LOW to power
+  the board off.
+- The `PWR` button = `BAT_KEY` = **GPIO18** (active‑low). It physically powers
+  the board on momentarily; firmware then latches GPIO17 high to stay on.
+- Before deep sleep, the latch is held through sleep with
+  `rtc_gpio_hold_en(GPIO17)` (and released with `gpio_hold_dis(GPIO17)` on wake);
+  otherwise the board powers down mid‑sleep and never wakes.
+
+Waveshare's boot order (their `user_app_init`):
+
+```cpp
+board_div.VBAT_POWER_ON();   // GPIO17 HIGH  -> latch battery power on
+board_div.POWEER_EPD_ON();   // GPIO6  LOW   -> panel rail on
+// ... EPD init ...
+// before deep sleep:  rtc_gpio_hold_en(GPIO17); esp_deep_sleep_start();
+// if woken by PWR(GPIO18): gpio_hold_dis(GPIO17); VBAT_POWER_OFF();  // power off
+```
+
+**Why it matters here:** on USB the board is powered from VBUS regardless of
+GPIO17; on **battery**, without driving/holding GPIO17 the board powers off as
+soon as PWR is released and cannot survive deep sleep.
+
+**Implemented** (`SleepManager::initBoardPower()`, called first in `setup()`):
+drive GPIO17 HIGH and `gpio_hold_en` + `gpio_deep_sleep_hold_en` so it stays
+latched through every wake/sleep cycle. A PWR‑button (GPIO18) deep‑sleep wake is
+detected in `checkWakeReason()` and routed to `SleepManager::powerOff()`, which
+`gpio_hold_dis`es GPIO17 and drives it LOW to power the board off (then sleeps so
+USB use can still resume with a button press). The panel rail (GPIO6, LOW) and
+FT6336 reset (GPIO7, LOW) use the same hold mechanism so the panel stays powered
++ hibernating and touch stays parked off through sleep — see §5.5.
+
+---
+
+## 4. What the code needed (and what was portable as‑is)
+
+| Area | T5 v2.2 | Waveshare S3 | Port effort |
+| --- | --- | --- | --- |
+| MCU | classic ESP32 (`esp32dev`) | ESP32‑S3 (`esp32s3`) | new PlatformIO env |
+| Panel | 2.9" 296×128 `GxEPD2_290` | 1.54" 200×200 `GxEPD2_154_D67` | conditional panel class |
+| SPI pins | bus defaults (18/23/19…) | 12/13 + manual bind | bind in `Display::begin()` |
+| Panel power | always on | gated, **active‑low**, GPIO6 | drive LOW in `begin()` |
+| Touch | n/a | FT6336 on always‑on 3V3 | hold in reset, see §5 |
+| Wake | ext1 button (GPIO37) | ext1 button (GPIO0 / BOOT) | retarget GPIO |
+| Sleep schedule, RTC clock, cache | chip‑agnostic | same | none |
+
+Wake was already a generic **ext1 button interrupt** (not classic‑ESP32 touch
+pads), so it ported by just changing the GPIO number. The forecast cache, hourly
++ quiet‑hours schedule, drift‑free RTC clock, and `RTC_DATA_ATTR` state are all
+chip‑agnostic and carried over unchanged.
+
+---
+
+## 5. The implemented port
+
+All Waveshare‑specific code is behind the **`BOARD_WAVESHARE_S3_154_TOUCH`**
+build flag, so the T5 build is byte‑for‑byte unchanged.
+
+### 5.1 `platformio.ini` — the `s3_touch` env
+
+```ini
+[env:s3_touch]
+board = esp32-s3-devkitc-1
+board_build.mcu = esp32s3
+board_build.flash_mode = qio
+board_build.flash_size = 8MB
+board_upload.flash_size = 8MB
+build_flags =
+	-DDEBUG_BUILD
+	-DBOARD_WAVESHARE_S3_154_TOUCH
+	-DARDUINO_USB_MODE=1        ; route Serial to the native USB‑Serial/JTAG
+	-DARDUINO_USB_CDC_ON_BOOT=1
+```
+
+- **Flash:** quad, 8 MB (matches the V2 eFuse reading).
+- **PSRAM:** intentionally **left disabled**. The firmware never needed PSRAM
+  (it ran on the PSRAM‑less classic ESP32), and a mismatched PSRAM mode is a
+  common boot‑loop cause. Enable later (`memory_type` + `BOARD_HAS_PSRAM`) only
+  if a feature wants it.
+- `min_spiffs.csv` (a 4 MB table) is inherited from the shared `[env]`; it fits
+  the 8 MB part with room to spare.
+
+### 5.2 `include/Config.h` — board pins
+
+The `pins` namespace selects the S3 map under the flag. Key entries:
+
+```cpp
+constexpr int EPD_PWR = 6;    // EPD3V3_EN: ACTIVE‑LOW (AO3401 P‑FET) -> LOW = on
 constexpr int EPD_CS = 11;
 constexpr int EPD_DC = 10;
 constexpr int EPD_RST = 9;
 constexpr int EPD_BUSY = 8;
-
 constexpr int SPI_SCK = 12;
+constexpr int SPI_MISO = -1;  // panel is write‑only
 constexpr int SPI_MOSI = 13;
-constexpr int SPI_MISO = -1;  // unused by the panel
+constexpr int EPD_TP_RST = 7; // FT6336 touch reset (held low in sleep)
 
-constexpr int BAT_ADC = 4;    // RTC/ADC1 — readable from ULP too
-
-// Wake buttons (all must be RTC GPIOs). BOOT has a pull-up already; add a
-// button to the reserved GPIO1 header for the "enter setup" action.
-constexpr gpio_num_t WAKE_REFRESH_GPIO = GPIO_NUM_0;  // BOOT button
-constexpr gpio_num_t WAKE_SETUP_GPIO = GPIO_NUM_1;    // add your own button
-#else
-// Lilygo T5 v2.2 (classic ESP32)
-constexpr int EPD_CS = 5;
-constexpr int EPD_DC = 19;
-constexpr int EPD_RST = 12;
-constexpr int EPD_BUSY = 4;
-
-constexpr int SPI_SCK = 18;
-constexpr int SPI_MISO = 2;
-constexpr int SPI_MOSI = 23;
-
-constexpr uint8_t WAKE_TOUCH = T5;
-constexpr uint8_t SETUP_TOUCH = T3;
-constexpr int WAKE_TOUCH_THRESHOLD = 29;
-constexpr int SETUP_TOUCH_THRESHOLD = 99;
-#endif
-}  // namespace pins
+constexpr int WAKE_BUTTON = 0;   // BOOT — the only usable user button
+constexpr int SETUP_BUTTON = 2;  // free RTC GPIO, INPUT_PULLUP (optional jumper)
 ```
 
-### 7.3 `src/display/Display.h` — conditional panel class
+Only the BOOT button is wired as a user key, so it doubles as wake/refresh.
+There's no second physical button, so `SETUP_BUTTON` points at a free reserved
+header GPIO read with an internal pull‑up: it reads "not held" unless someone
+ties it to GND, and first‑run setup is still reached automatically whenever no
+WiFi is stored.
 
-The 200×200 Waveshare 1.54" V2 is the SSD1681 `GxEPD2_154_D67`. **Confirm against
-the controller marking on your panel** — the "G" sku may use a different LUT/class.
+### 5.3 `src/display/Display.h` — conditional panel class
 
 ```cpp
-#if defined(BOARD_WAVESHARE_S3_154)
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
   GxEPD2_BW<GxEPD2_154_D67, GxEPD2_154_D67::HEIGHT> gfx_{
       GxEPD2_154_D67(pins::EPD_CS, pins::EPD_DC, pins::EPD_RST, pins::EPD_BUSY)};
 #else
-  GxEPD2_BW<GxEPD2_290, GxEPD2_290::HEIGHT> gfx_{
-      GxEPD2_290(pins::EPD_CS, pins::EPD_DC, pins::EPD_RST, pins::EPD_BUSY)};
+  GxEPD2_BW<GxEPD2_290, GxEPD2_290::HEIGHT> gfx_{ /* T5 2.9" */ };
 #endif
 ```
 
-### 7.4 `src/display/Display.cpp` — power rail + SPI remap in `begin()`
-
-The S3 SPI pins aren't the defaults, so bind SPI (and power the panel) *before*
-`init()`.
+### 5.4 `src/display/Display.cpp` — power rail + SPI bind in `begin()`
 
 ```cpp
-void Display::begin() {
-#if defined(BOARD_WAVESHARE_S3_154)
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
   pinMode(pins::EPD_PWR, OUTPUT);
-  digitalWrite(pins::EPD_PWR, HIGH);                 // power the panel rail
+  digitalWrite(pins::EPD_PWR, LOW);   // active‑low: LOW powers the panel (§3)
+
+  // FT6336 sits on the always‑on 3V3 rail, so park it in reset to save battery.
+  pinMode(pins::EPD_TP_RST, OUTPUT);
+  digitalWrite(pins::EPD_TP_RST, LOW);
+  gpio_hold_en((gpio_num_t)pins::EPD_TP_RST);
+  gpio_deep_sleep_hold_en();           // keep RST low through deep sleep
+
   SPI.begin(pins::SPI_SCK, pins::SPI_MISO, pins::SPI_MOSI, pins::EPD_CS);
 #endif
-#ifdef DEBUG_BUILD
-  gfx_.init(115200, false);
-#else
-  gfx_.init(0, false);
-#endif
-}
 ```
 
-200×200 vs 296×128 means the column layout in `drawDayColumn` / `drawDaysAhead`
-needs re‑proportioning — a separate cosmetic pass.
+SPI is bound here (not in `main()`) because the S3 panel pins aren't the bus
+defaults — and the default S3 `MOSI` is GPIO11, which is our CS. The core's
+`SPI.begin()` early‑returns if the bus is already initialized, so this custom
+bind wins over the no‑arg `SPI.begin()` that GxEPD2's `init()` calls internally.
+`main.cpp` therefore guards its own `SPI.begin()` to non‑S3 boards.
 
-### 7.5 `src/power/SleepManager.cpp` — button wake instead of touch pads
+All non‑weather screens (connection / offline / no‑WiFi / settings‑saved) use a
+**full‑window** refresh and auto‑center/scale their text to the panel size;
+partial refreshes don't reliably latch on this SSD1681, and the old text was
+hard‑positioned for 296×128.
 
-> **Note (current code):** this migration is already done — `SleepManager` uses
-> ext1 button wake (`enableWakeSources()`), and `Config.h` defines `WAKE_BUTTON =
-> GPIO37` / `SETUP_BUTTON = GPIO39` (no touch pads, no drift compensation). For a
-> new board, just retarget the GPIO numbers. The snippet below is kept as the
-> reference pattern.
+### 5.5 `src/power/SleepManager.cpp` — power latch + wake + touch + ULP guards
 
-Replace `enableTouchWake()` / `wakeupTouchGpio()` (classic‑ESP32 touch) with EXT1
-wake using a two‑button bitmask (keeps the refresh‑vs‑setup distinction).
+- **`initBoardPower()`** (called first in `setup()`): latches `VBAT_PWR`/GPIO17
+  HIGH and holds it through deep sleep so the board stays powered on battery
+  (§3.1). No‑op effect on the T5.
+- **ext1 wake** targets `WAKE_BUTTON`/GPIO0 (BOOT) and, on the S3, also
+  `PWR_BUTTON`/GPIO18, using `ESP_EXT1_WAKEUP_ANY_LOW` (the T5 keeps a single‑pin
+  `ALL_LOW`).
+- **Button behavior (S3):**
+  - **BOOT, short tap** → wake + immediate refresh (`RefreshNow`).
+  - **BOOT, long press (~3 s)** → open the at.mo setup portal (`EnterSettings`).
+    `setupButtonHeld()` polls GPIO0 after wake and returns true only if held past
+    the threshold (returns immediately on release, so a refresh tap stays snappy).
+    Setup mode stays awake, so it doubles as the **USB re‑flash window** (§8.1).
+  - **PWR press** → `powerOff()`: unlatches GPIO17 → board powers off on battery.
+- The classic‑only `#include "esp32/ulp.h"` and the `RTC_SLOW_MEM` memset are
+  guarded out for the S3 (the S3 ULP isn't used by this build).
+- The panel rail (GPIO6 LOW) and FT6336 reset (GPIO7 LOW) stay latched across
+  deep sleep via the GPIO hold set in `Display::begin()`, so the panel stays
+  powered + hibernating (image/RAM retained) and touch can't drain the battery.
 
-```cpp
-#if defined(BOARD_WAVESHARE_S3_154)
-void SleepManager::enableButtonWake() {
-  const uint64_t mask =
-      (1ULL << pins::WAKE_REFRESH_GPIO) | (1ULL << pins::WAKE_SETUP_GPIO);
-  // S3 supports ANY_LOW; buttons are active-low to GND (ensure pull-ups).
-  esp_sleep_enable_ext1_wakeup(mask, ESP_EXT1_WAKEUP_ANY_LOW);
-}
+### 5.6 Setup‑portal interactions & robustness refinements (S3)
 
-int SleepManager::wakeupButtonGpio() {
-  uint64_t status = esp_sleep_get_ext1_wakeup_status();
-  if (status & (1ULL << pins::WAKE_SETUP_GPIO)) return pins::WAKE_SETUP_GPIO;
-  if (status & (1ULL << pins::WAKE_REFRESH_GPIO)) return pins::WAKE_REFRESH_GPIO;
-  return -1;
-}
-#endif
+Setup mode stays awake (it hosts the AP + web server), which is also the easy
+USB re‑flash window (§8.1). Button handling while in setup (`main.cpp` `loop()`):
+
+- **Tap BOOT** → resume normal operation (only if WiFi is already saved). Requires
+  a full release→press→release so the long‑press that opened setup doesn't bounce
+  straight out, and so GPIO0 is HIGH at the `ESP.restart()` (otherwise it would
+  strap the chip into ROM download mode).
+- **PWR** → `powerOff()` so a board left in setup on battery doesn't sit hosting
+  the AP and drain.
+
+Code‑review fixes made during this pass (apply to both boards unless noted):
+
+- **Failed daily fetch now recovers on the backoff schedule** instead of waiting
+  a full day: `SleepManager::fetchRetryPending()` (failure streak > 0) forces a
+  fetch on the next wake, and a fetch that fails while cache exists now sleeps via
+  `deepSleepRetry()` (still showing cached data) rather than the daily schedule.
+- **Hourly window aligned to the Date‑synced clock**: the hourly slice start index
+  is computed from `out.current.utcEpoch` (the same time fed to `setClock`), not
+  the coarse JSON `current.time`, so the curve's left edge tracks the on‑screen
+  clock (`OpenMeteoProvider`).
+- **S3 error screen** says "Hold BOOT to open setup" (no dedicated setup button).
+
+---
+
+## 6. Barebones bring‑up test (`s3_test` env)
+
+A flag‑gated (`BAREBONES_EPD_TEST`) test in `main.cpp` bypasses the entire app —
+Settings, WiFi, layouts — and draws a fixed pattern (border, solid block, corner
+marks, "HELLO") straight to the panel with verbose logging. It was the tool that
+isolated the active‑low power bug from the app logic.
+
+```bash
+~/.pio-venv/bin/pio run -e s3_test -t upload --upload-port /dev/cu.usbmodem2101
 ```
 
-Then:
-
-- The three sleep paths swap `enableTouchWake()` → `enableButtonWake()`.
-- In `checkWakeReason`, the `ESP_SLEEP_WAKEUP_TOUCHPAD` branch becomes
-  `ESP_SLEEP_WAKEUP_EXT1`, mapping `WAKE_SETUP_GPIO → EnterSettings`, else
-  `RefreshNow`.
-- Everything else — timer wake, the hourly + quiet-hours schedule, and
-  `RTC_DATA_ATTR` state — is chip‑agnostic and carries over unchanged.
-- Optional: after `display.hibernate()`, drive `EPD_PWR` LOW. E‑paper retains its
-  image with the rail off, saving sleep current.
-
-If a second button isn't wanted initially, drop to single‑button
-`esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0)` and treat every press as
-`RefreshNow`.
+Keep it as a future bring‑up aid, or delete the `s3_test` env + the
+`#if defined(BAREBONES_EPD_TEST)` blocks once no longer needed.
 
 ---
 
-## 8. Touch power‑gating (Touch SKU only) — VERIFIED on schematic
+## 7. ULP‑driven hourly refresh — analyzed and deliberately NOT pursued
 
-Checked against `ESP32-S3-Touch-ePaper-1.54-Schematic.pdf`:
+The board makes ULP‑driven refresh *physically* possible (SPI panel; every EPD
+pin, incl. the power enable, on RTC GPIOs). After a deep analysis against this
+project's actual use case — an **hourly clock that changes each hour** — it is
+the wrong investment. Three independent reasons, any one of which is decisive:
 
-- The switchable **EPD3V3** rail is gated by **Q2 (AO3401)** via **EPD3V3_EN =
-  GPIO6**, and feeds **only the e‑paper panel** (J10 VCI/VDD).
-- The **FT6336 touch** block is powered from the **permanent 3V3 rail**, *not*
-  EPD3V3. So driving `EPD_PWR`/GPIO6 LOW does **not** turn touch off.
+**1. It doesn't eliminate the hourly CPU wake (zero benefit for a changing clock).**
+The whole point would be to redraw without waking the main cores. But each hour
+the *content changes* (the clock reads a new hour; the 24 h curve rolls). To
+produce the new frame the ULP would have to either:
+- read the time — but the PCF85063 RTC and the only I²C bus are on GPIO47/48,
+  **outside** the RTC domain, so the ULP can't read them; or
+- render text/curves itself — far beyond a bit‑bang blit; or
+- replay a pre‑rendered frame — but only **one** 200×200×1bpp frame (5000 B)
+  fits in the S3's **8 KB `RTC_SLOW_MEM`**, which the ULP program must also share.
+So the CPU must wake each hour to render the next frame regardless → the ULP
+cannot remove the hourly wake → **no energy saved**. (A static image the ULP
+could repaint would benefit; our changing clock cannot.)
 
-**Implication:** if you buy the Touch SKU, the touch controller would stay
-powered (and drain battery) in deep sleep unless you explicitly disable it.
+**2. Our stack doesn't support it; it would force an ESP‑IDF rewrite.**
+ULP‑RISC‑V needs the ESP‑IDF build system. Arduino / PlatformIO‑Arduino do **not**
+support it (confirmed: PlatformIO community reports, `ddekanski/esp32_riscv_ulp_test`
+"neither Arduino IDE nor PlatformIO support RISC‑V ULP", and our own toolchain is
+arduino‑esp32 2.0.17). There is also **no ULP SPI API or example** — Espressif
+issue **IDFGH‑15605** is an *open feature request*; you'd hand‑write bit‑banged
+SPI in RISC‑V. Adopting IDF means re‑homing WiFi, HTTPClient, GxEPD2, Preferences,
+and the WebServer captive portal — a ground‑up rewrite for the whole app.
 
-**Fix (touch stays usable, but OFF in sleep):** `EPD_TP_RST = GPIO7` is
-RTC‑capable and holds its level through deep sleep. Before sleeping, either:
+**3. The power math is marginal even in the best case.**
+Measured ULP draw is ~**416 µA while running** vs ~**34 µA** idle deep sleep
+(`ddekanski`). A refresh needs the ULP active for the panel's full ~1.3 s BUSY
+wait, and the CPU wake it would (hypothetically) replace is only ~0.008 mAh.
+The daily energy budget is dominated by the once‑a‑day WiFi fetch and baseline
+deep‑sleep current, not the brief hourly render — so even an ideal ULP path would
+shave a low‑single‑digit percentage, for a massive rewrite and ongoing fragility.
 
-- `digitalWrite(GPIO7 /*EPD_TP_RST*/, LOW)` to hold the FT6336 in reset (~µA), or
-- command FT6336 hibernate over I²C (write `0x03` to register `0xA5`).
+**Decision:** keep the brief hourly **main‑core** wake (it's already efficient —
+~1–2 s awake, then deep sleep with all rails/holds managed, §3.1/§5.5). Revisit
+the ULP only if the product ever shows **static** content for long stretches, or
+if Espressif ships first‑class ULP‑SPI + Arduino support. If pursued anyway, the
+prerequisite is an ESP‑IDF (or arduino‑as‑component) migration tracked as its own
+project — not a drop‑in.
 
-Wake/refresh via a button as planned. The non‑touch SKU (32298) avoids this
-entirely and frees GPIO7/GPIO21.
-
-## 9. Verify when the board arrives
-
-- [ ] **Panel driver class** — `GxEPD2_154_D67` vs the "G" variant; confirm from
-      the controller marking or Waveshare's example `#define`.
-- [ ] **GPIO1 wake button** needs a pull-up (BOOT/GPIO0 already has one).
-- [ ] **PSRAM memory type** — `qio_opi` for N16R8; adjust if a different module.
-- [ ] **(Touch SKU)** add the `EPD_TP_RST`/GPIO7 reset‑hold to the sleep path.
-- [ ] **(If choosing 3.97")** confirm EPD GPIOs are within 0–21 from the schematic.
-
----
-
-## 10. Appendix — the ULP e‑ink path (reality check)
-
-Even on the right board, "write the e‑ink from the ULP" is real work:
-
-1. **Leave Arduino for ESP‑IDF** (or IDF‑as‑component under PlatformIO) — the
-   ULP‑RISC‑V toolchain isn't available via the Arduino ULP‑FSM path.
-2. **Hand‑write a bit‑banged SPI** in ULP‑RISC‑V C: toggle SCK/MOSI/CS via
-   `RTC_GPIO_OUT_W1TS/W1TC`, read BUSY via `RTC_GPIO_IN`. No 50% duty clock is
-   needed (SPI is clocked), but timing is a calibrated loop at ~17.5 MHz.
-3. **RTC GPIO indices ≠ normal GPIO indices** — map through `rtc_io` tables.
-4. **Pre‑stage the framebuffer + command sequence in RTC_SLOW_MEM** before sleep;
-   the ULP streams it to the panel and re‑arms its timer.
-5. The board choice only makes this *possible* (SPI panel + all pins RTC). It does
-   not make it easy.
-
-A pragmatic middle ground: keep the daily refresh on the main core (wake → WiFi →
-fetch → render → sleep) and reserve the ULP for the cases that actually benefit
-(e.g. a fast local partial‑refresh without a full core wake).
+> References: ESP‑IDF ULP‑RISC‑V guide (esp32s3) `docs.espressif.com`; ULP‑SPI
+> feature request `github.com/espressif/esp-idf/issues/16235` (IDFGH‑15605);
+> `github.com/ddekanski/esp32_riscv_ulp_test` (ULP current measurements + the
+> Arduino/PlatformIO support gap).
 
 ---
 
-## 11. References
+## 8. Build / flash / monitor
 
-- Waveshare ESP32‑S3‑ePaper‑1.54 / 1.54G docs (GPIO table) —
-  `docs.waveshare.com/ESP32-S3-ePaper-1.54` and `...-1.54G`
-- Waveshare ESP32‑S3‑ePaper‑3.97 docs — `docs.waveshare.com/ESP32-S3-ePaper-3.97`
-- LilyGo T5 E‑Paper S3 Pro wiki — `wiki.lilygo.cc` (BQ25896/BQ27220/TPS65185)
-- ESP‑IDF ULP‑RISC‑V programming guide & sleep modes —
-  `docs.espressif.com` (esp32s3)
-- ESP‑IDF issue: ULP RISC‑V SPI support (IDFGH‑15605) — bit‑bang approach
-- GxEPD2 (ZinggJM) — panel driver classes
+```bash
+# Build + flash the app
+~/.pio-venv/bin/pio run -e s3_touch -t upload --upload-port /dev/cu.usbmodem2101
+```
+
+Toolchain note: the stock PlatformIO `espressif32` platform here bundles
+**arduino‑esp32 2.0.17**, which builds and runs this firmware fine. (Waveshare's
+wiki asks for arduino‑esp32 3.3.0+, but that's for *their* LVGL/audio/touch
+examples — not this minimal GxEPD2 build.)
+
+### 8.1 Download mode — REQUIRED to re‑flash the production firmware
+
+Because the production firmware **deep‑sleeps between updates**, and the
+ESP32‑S3's **native USB‑Serial/JTAG turns off in deep sleep**, the
+`/dev/cu.usbmodem…` port **disappears whenever the board is asleep**. esptool
+then can't auto‑reset it, so uploads fail with *"Could not open … the port is
+busy or doesn't exist."* This is expected, not a fault.
+
+**Easiest path — the setup‑portal flash window:** long‑press the **BOOT** button
+(~3 s) to enter the at.mo setup portal. The device stays awake there, so the
+USB‑Serial/JTAG port stays enumerated and you can flash normally (no download
+mode needed). Use this whenever the firmware is healthy.
+
+**Fallback — ROM download mode** (first flash, or if the firmware is broken /
+sleeping). Per Waveshare's wiki: "hold the BOOT button to power on again to enter
+download mode":
+
+1. Unplug the battery (if attached) and the USB cable so the board is fully off.
+2. **Hold the BOOT button.**
+3. Plug in USB while still holding BOOT (equivalently: hold BOOT, tap RST, then
+   release BOOT).
+4. Release BOOT. `/dev/cu.usbmodem…` now appears and stays put (the ROM
+   bootloader doesn't sleep).
+5. Run the upload command above. esptool hard‑resets the board to run afterward.
+
+Tip: confirm the port came up before flashing — `ls /dev/cu.*`.
+
+### 8.2 Monitoring serial
+
+The board enumerates as native USB‑Serial/JTAG (e.g. `/dev/cu.usbmodem2101`), but
+only while it's **awake** (boot → fetch/render → just before deep sleep).
+`pio device monitor` needs a TTY; in a non‑TTY shell, read the port with a short
+pyserial script (toggle RTS to reset, then read) right after a reset/wake.
+
+### 8.3 Settings / NVS
+
+WiFi creds + preferences live in NVS and survive a reflash. To force first‑run
+setup, hold the setup jumper, or wipe NVS with `pio run -e s3_touch -t erase`
+and re‑upload.
+
+### 8.4 Running on battery
+
+After flashing, unplug USB, connect the Li‑ion battery, and **press/hold the PWR
+button** to power on (the firmware then latches `VBAT_PWR`/GPIO17 to stay on —
+§3.1). A single PWR press while running powers the board off (unlatch).
+
+---
+
+## 9. References
+
+- Waveshare wiki — [ESP32‑S3‑ePaper‑1.54](https://docs.waveshare.com/ESP32-S3-ePaper-1.54)
+  (board overview, V1/V2 modules, SKUs, GPIO table, onboard resources).
+- Waveshare demo repo —
+  [github.com/waveshareteam/ESP32‑S3‑ePaper‑1.54](https://github.com/waveshareteam/ESP32-S3-ePaper-1.54).
+  The authoritative pin/power/sleep reference is
+  `02_Example/Arduino/11_RTC_Sleep_Test` (`user_config.h`, `board_power_bsp.cpp`,
+  `user_app.cpp`) — confirms EPD_PWR active‑low and the GPIO17 VBAT latch.
+- Waveshare schematic — `ESP32‑S3‑Touch‑ePaper‑1.54‑Schematic.pdf`
+  (EPD3V3_EN / AO3401 power switch, J10 panel connector).
+- GxEPD2 (ZinggJM) — `GxEPD2_154_D67` driver for the GDEY0154D67 panel.
+- ESP‑IDF ULP‑RISC‑V programming guide & sleep modes (esp32s3) —
+  `docs.espressif.com`.

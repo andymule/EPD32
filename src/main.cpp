@@ -132,11 +132,79 @@ void stopIntro() {
 }
 }  // namespace
 
+#if defined(BAREBONES_EPD_TEST)
+// Minimal, app-independent panel bring-up test. Bypasses Settings/WiFi/layouts
+// and draws an unmistakable pattern straight to the panel so we can confirm
+// pins + driver class + SPI in isolation. Enable via the s3_test env.
+#include <Fonts/FreeSansBold18pt7b.h>
+
+#include <GxEPD2_BW.h>
+namespace {
+GxEPD2_BW<GxEPD2_154_D67, GxEPD2_154_D67::HEIGHT> testEpd{
+    GxEPD2_154_D67(pins::EPD_CS, pins::EPD_DC, pins::EPD_RST, pins::EPD_BUSY)};
+
+void runBarebonesEpdTest() {
+  Serial.begin(115200);
+  delay(300);
+  Serial.println();
+  Serial.println("=== BAREBONES EPD TEST ===");
+  Serial.printf("pins CS=%d DC=%d RST=%d BUSY=%d SCK=%d MOSI=%d PWR=%d\n",
+                pins::EPD_CS, pins::EPD_DC, pins::EPD_RST, pins::EPD_BUSY,
+                pins::SPI_SCK, pins::SPI_MOSI, pins::EPD_PWR);
+
+  // P-channel high-side switch (AO3401) on GPIO6 -> drive LOW to power the panel.
+  pinMode(pins::EPD_PWR, OUTPUT);
+  digitalWrite(pins::EPD_PWR, LOW);   // enable panel rail (active-LOW)
+  pinMode(pins::EPD_TP_RST, OUTPUT);
+  digitalWrite(pins::EPD_TP_RST, LOW);  // park touch in reset
+  delay(100);
+  pinMode(pins::EPD_BUSY, INPUT);
+  Serial.printf("BUSY level after power-on (LOW): %d\n", digitalRead(pins::EPD_BUSY));
+  Serial.println("power rail on, binding SPI...");
+
+  SPI.begin(pins::SPI_SCK, pins::SPI_MISO, pins::SPI_MOSI, pins::EPD_CS);
+  Serial.println("SPI ok, init panel...");
+  testEpd.init(115200, true, 10, false);
+  Serial.println("init done, drawing...");
+
+  testEpd.setRotation(0);
+  testEpd.setFullWindow();
+  testEpd.firstPage();
+  do {
+    testEpd.fillScreen(GxEPD_WHITE);
+    testEpd.drawRect(0, 0, 200, 200, GxEPD_BLACK);      // full border
+    testEpd.fillRect(20, 20, 160, 70, GxEPD_BLACK);     // big solid block
+    testEpd.fillRect(0, 0, 30, 30, GxEPD_BLACK);        // top-left corner mark
+    testEpd.fillRect(170, 170, 30, 30, GxEPD_BLACK);    // bottom-right mark
+    testEpd.setTextColor(GxEPD_BLACK);
+    testEpd.setFont(&FreeSansBold18pt7b);
+    testEpd.setCursor(30, 140);
+    testEpd.print("HELLO");
+  } while (testEpd.nextPage());
+
+  testEpd.hibernate();
+  Serial.println("=== TEST DRAW COMPLETE ===");
+}
+}  // namespace
+#endif  // BAREBONES_EPD_TEST
+
 void setup() {
+#if defined(BAREBONES_EPD_TEST)
+  runBarebonesEpdTest();
+  return;
+#endif
   [[maybe_unused]] uint32_t startMs = millis();
   LOG_BEGIN(115200);
 
+  // Latch the battery rail on before any long work so the board stays powered
+  // after the PWR button is released when running from battery (no-op on USB).
+  sleepManager.initBoardPower();
+
+#if !defined(BOARD_WAVESHARE_S3_154_TOUCH)
+  // T5: the panel pins are the SPI bus defaults, so bind the bus here. The S3
+  // board binds SPI inside Display::begin() (custom pins + panel power rail).
   SPI.begin(pins::SPI_SCK, pins::SPI_MISO, pins::SPI_MOSI, SS);
+#endif
   display.begin();
   settings.begin();
   // Apply the user-chosen orientation and layout before anything is drawn.
@@ -162,6 +230,10 @@ void setup() {
     sleepManager.setWeatherOnScreen(false);
     display.drawConnectionInstructions();
     setupPortal.begin(settings, display);
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+    pinMode(pins::WAKE_BUTTON, INPUT_PULLUP);  // BOOT tap-to-exit in loop()
+    pinMode(pins::PWR_BUTTON, INPUT_PULLUP);   // PWR power-off in loop()
+#endif
     inSetupMode = true;
     return;
   }
@@ -173,9 +245,12 @@ void setup() {
   bool haveCache = cache::load(forecast, city);
 
   // Network fetch only when: the user presses the button, after a hard reset,
-  // once a day at FETCH_HOUR, or whenever we have no usable cached data/clock.
+  // once a day at FETCH_HOUR, whenever we have no usable cached data/clock, or
+  // when a prior fetch failed and a retry is still owed (so a failed daily fetch
+  // recovers on the backoff schedule instead of waiting a whole day).
   bool doFetch = reason == WakeReason::RefreshNow ||
-                 reason == WakeReason::HardReset || !haveCache;
+                 reason == WakeReason::HardReset || !haveCache ||
+                 sleepManager.fetchRetryPending();
   if (!doFetch && reason == WakeReason::TimedRefresh) {
     if (sleepManager.clockValid()) {
       time_t localNow =
@@ -188,6 +263,7 @@ void setup() {
   LOGF("Wake reason %d, cache %d, fetch %d\n", (int)reason, (int)haveCache,
        (int)doFetch);
 
+  bool fetchFailed = false;  // attempted a fetch this wake but it didn't land
   if (doFetch) {
     // Kick off WiFi association, then run an intro animation on the second core
     // for the whole connect+fetch — the main core does the network work and the
@@ -217,9 +293,12 @@ void setup() {
       // any) and back off with the retry interval.
       if (r.wifiFailed) failWiFi(ssid);
       failSite();
+    } else {
+      // Fetch failed but cached data exists: redraw the cache (below) with the
+      // live clock, then sleep on the *retry* backoff so we re-attempt soon
+      // instead of waiting for the next daily fetch hour.
+      fetchFailed = true;
     }
-    // Otherwise: fetch failed but cached data exists -> fall through and redraw
-    // it (with the live clock), then resume the normal hourly schedule.
   }
 
   [[maybe_unused]] uint32_t drawStart = millis();
@@ -229,10 +308,50 @@ void setup() {
 
   LOGF("Draw %lums, total %lums\n", (unsigned long)drawMs,
        (unsigned long)(millis() - startMs));
-  sleepManager.deepSleep(display, settings, forecast.current.utcOffsetSeconds);
+  if (fetchFailed)
+    sleepManager.deepSleepRetry(display, settings);  // recover on backoff
+  else
+    sleepManager.deepSleep(display, settings, forecast.current.utcOffsetSeconds);
 }
 
 void loop() {
+#if defined(BAREBONES_EPD_TEST)
+  delay(1000);
+  return;
+#endif
   // Only the setup portal needs the main loop; normal runs deep-sleep in setup().
-  if (inSetupMode) setupPortal.handle();
+  if (!inSetupMode) return;
+  setupPortal.handle();
+
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+  // Tap the top (BOOT) button to leave setup and resume normal operation -- but
+  // only once WiFi is already configured. Require a full release -> press ->
+  // release cycle: the long-press that opened setup may still be held on entry,
+  // and the button must be released (GPIO0 HIGH) when we reboot, or it would
+  // strap the chip into ROM download mode.
+  static bool sawRelease = false;  // button let go after entering setup
+  static bool sawPress = false;    // a fresh press seen after that release
+  const bool pressed = digitalRead(pins::WAKE_BUTTON) == LOW;
+  if (!sawRelease) {
+    sawRelease = !pressed;
+  } else if (!sawPress) {
+    sawPress = pressed;
+  } else if (!pressed) {  // released after a fresh tap
+    if (settings.ssid().length() > 0) {
+      LOGLN("BOOT tap in setup -> resume normal mode");
+      ESP.restart();
+    }
+    sawPress = false;  // no WiFi saved yet: stay in setup, wait for another tap
+  }
+
+  // PWR button powers the board off from setup, so it can't sit hosting the AP
+  // and draining the battery if left unattended.
+  if (digitalRead(pins::PWR_BUTTON) == LOW) {
+    delay(20);  // debounce
+    if (digitalRead(pins::PWR_BUTTON) == LOW) {
+      LOGLN("PWR in setup -> power off");
+      sleepManager.powerOff();  // does not return
+    }
+  }
+#endif
 }

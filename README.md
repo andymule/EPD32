@@ -3,7 +3,20 @@
 A low-power ESP32 e-paper weather display. It fetches the local forecast over
 WiFi once a day, caches it, then wakes briefly each hour to redraw the clock from
 the cached data and deep-sleeps in between. A button press triggers an immediate
-refresh. It renders to a 2.9" black/white e-paper panel in one of two layouts.
+refresh. It renders to a black/white e-paper panel in one of two layouts.
+
+Two boards are supported, selected by PlatformIO environment:
+
+- **Lilygo T5 v2.2** — ESP32 + 2.9" 296×128 panel (`debug`/`release` envs).
+- **Waveshare ESP32-S3-Touch-ePaper-1.54** — ESP32-S3 + 1.54" 200×200 panel,
+  onboard battery charging + touch (`s3_touch` env). See `HARDWARE.md`.
+
+## Documentation
+
+- `HARDWARE.md` — board reference (pinout, power rules, peripherals, flashing) for
+  building any firmware on the Waveshare S3 board.
+- `BOARD_MIGRATION.md` — how Atmo was ported from the T5 to the S3.
+- `ULP_REFRESH.md` — deferred ULP-driven-refresh plan and honest tradeoffs.
 
 ## Building (PlatformIO)
 
@@ -24,8 +37,9 @@ pio run --target upload
 pio device monitor
 ```
 
-Two build profiles are defined in `platformio.ini`: `debug` (default, serial
-logging via `-DDEBUG_BUILD`) and `release` (no logging, smaller/lower power).
+Build environments in `platformio.ini`: `debug` (default, T5 with serial logging
+via `-DDEBUG_BUILD`), `release` (T5, no logging, smaller/lower power), and
+`s3_touch` (Waveshare ESP32-S3 build — flashing notes in `HARDWARE.md`).
 
 Dependencies are declared in `platformio.ini` and fetched automatically:
 
@@ -136,10 +150,13 @@ tools/preview/             Desktop harness to render the layouts to PNG (see its
 
 ## Hardware
 
-Lilygo T5 v2.2 (ESP32 + integrated 2.9" b/w e-paper). No external wiring needed.
+Two boards are supported (pin maps live in `include/Config.h`, the `pins`
+namespace, selected by the `BOARD_WAVESHARE_S3_154_TOUCH` build flag). For the
+Waveshare ESP32-S3 board's full pinout, power rules, and peripherals, see
+`HARDWARE.md`; the section below documents the default Lilygo T5 v2.2.
 
-Pin assignments live in `include/Config.h` (the `pins` namespace) and default to
-the T5 v2.2:
+Lilygo T5 v2.2 (ESP32 + integrated 2.9" b/w e-paper). No external wiring needed.
+Pin assignments default to the T5 v2.2:
 
 | Signal | GPIO |       | Signal | GPIO |
 | ------ | ---- | ----- | ------ | ---- |

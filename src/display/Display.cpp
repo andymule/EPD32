@@ -4,10 +4,37 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+#include <SPI.h>
+#include <driver/gpio.h>
+#endif
+
 #include "display/weather_layout.h"
 #include "fonts/FreeSansOblique7pt7b.h"
 
 void Display::begin() {
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+  // Power the panel rail and bind SPI before init() (on the T5, main() owns
+  // SPI.begin since its panel pins are the bus defaults). EPD_PWR (GPIO6) gates
+  // the EPD3V3 rail via an AO3401 P-FET, so it is ACTIVE-LOW. Hold it LOW across
+  // deep sleep so the panel stays powered + hibernating (image/RAM retained)
+  // rather than floating its gate. (HARDWARE.md "Power rules" has the full story.)
+  pinMode(pins::EPD_PWR, OUTPUT);
+  digitalWrite(pins::EPD_PWR, LOW);
+  gpio_hold_en(static_cast<gpio_num_t>(pins::EPD_PWR));
+
+  // Park the FT6336 touch controller in reset for good: it's on the always-on
+  // 3V3 rail, and the firmware never uses touch, so holding RST low (and
+  // latching that level through deep sleep) keeps it from draining the battery.
+  pinMode(pins::EPD_TP_RST, OUTPUT);
+  digitalWrite(pins::EPD_TP_RST, LOW);
+  gpio_hold_en(static_cast<gpio_num_t>(pins::EPD_TP_RST));
+
+  // Keep the pin holds above (and the VBAT latch) active while in deep sleep.
+  gpio_deep_sleep_hold_en();
+
+  SPI.begin(pins::SPI_SCK, pins::SPI_MISO, pins::SPI_MOSI, pins::EPD_CS);
+#endif
 #ifdef DEBUG_BUILD
   gfx_.init(115200, false);
 #else
@@ -130,54 +157,89 @@ void Display::drawWeather(const Forecast& forecast, const String& city) {
   } while (gfx_.nextPage());
 }
 
+namespace {
+// Draws a vertically- and horizontally-centered text block (optional title plus
+// body lines) using a full-window refresh, so it shows reliably on any panel
+// (partial refreshes don't always latch on the 1.54" SSD1681) and adapts to the
+// panel's geometry (296x128 T5 vs 200x200 S3). The panel class differs per
+// board, so gfx is a template parameter. An empty line acts as a blank spacer.
+template <typename GFX>
+void drawCenteredScreen(GFX& gfx, const char* title, const char* const* lines,
+                        int count) {
+  const bool narrow = gfx.width() < 240;
+  const GFXfont* titleFont = narrow ? &FreeSansBold12pt7b : &FreeSansBold18pt7b;
+  const GFXfont* bodyFont = narrow ? &FreeSans7pt7b : &FreeSans9pt7b;
+
+  const int W = gfx.width();
+  const int H = gfx.height();
+  const int titleLH = title ? titleFont->yAdvance : 0;
+  const int bodyLH = bodyFont->yAdvance;
+  const int gap = title ? bodyLH / 2 : 0;  // breathing room under the title
+  const int blockH = titleLH + gap + count * bodyLH;
+
+  gfx.setFullWindow();
+  gfx.firstPage();
+  do {
+    gfx.fillScreen(GxEPD_WHITE);
+    gfx.setTextColor(GxEPD_BLACK);
+    int16_t bx, by;
+    uint16_t bw, bh;
+    int y = (H - blockH) / 2;
+    if (y < 0) y = 0;
+    if (title) {
+      gfx.setFont(titleFont);
+      gfx.getTextBounds(title, 0, 0, &bx, &by, &bw, &bh);
+      gfx.setCursor((W - static_cast<int>(bw)) / 2 - bx, y - by);
+      gfx.print(title);
+      y += titleLH + gap;
+    }
+    gfx.setFont(bodyFont);
+    for (int i = 0; i < count; i++) {
+      gfx.getTextBounds(lines[i], 0, 0, &bx, &by, &bw, &bh);
+      gfx.setCursor((W - static_cast<int>(bw)) / 2 - bx, y - by);
+      gfx.print(lines[i]);
+      y += bodyLH;
+    }
+  } while (gfx.nextPage());
+}
+}  // namespace
+
 void Display::drawConnectionInstructions() {
-  gfx_.setPartialWindow(0, 0, gfx_.width(), gfx_.height());
-  gfx_.fillScreen(GxEPD_WHITE);
-  gfx_.setFont(font9_);
-  gfx_.setTextColor(GxEPD_BLACK);
-  gfx_.setCursor(0, 19);
-  gfx_.println("Connect to ATMO WiFi network.");
-  gfx_.println("Then, browse to at.mo");
-  gfx_.println();
-  gfx_.println("Configure and enjoy!");
-  gfx_.nextPage();
+  const char* lines[] = {"Join the \"Atmo\"", "WiFi network,",
+                         "then open at.mo", "to set up."};
+  drawCenteredScreen(gfx_, "Atmo", lines, 4);
 }
 
 void Display::drawFailedToConnectToSite() {
-  gfx_.setPartialWindow(0, 0, gfx_.width(), gfx_.height());
-  gfx_.fillScreen(GxEPD_WHITE);
-  gfx_.setFont(font9_);
-  gfx_.setTextColor(GxEPD_BLACK);
-  gfx_.setCursor(0, 40 + 9);
-  gfx_.println("Couldn't reach the weather");
-  gfx_.println("service. Check your internet.");
-  gfx_.println();
-  gfx_.println("Retrying soon...");
-  gfx_.nextPage();
+  const char* lines[] = {"Couldn't reach the", "weather service.", "",
+                         "Retrying soon..."};
+  drawCenteredScreen(gfx_, "Offline", lines, 4);
 }
 
 void Display::drawFailedToConnectToWiFi(const String& ssid) {
-  gfx_.setPartialWindow(0, 0, gfx_.width(), gfx_.height());
-  gfx_.fillScreen(GxEPD_WHITE);
-  gfx_.setFont(font9_);
-  gfx_.setTextColor(GxEPD_BLACK);
-  gfx_.setCursor(0, 20 + 9);
-  gfx_.println("Couldn't join WiFi network:");
-  gfx_.println(ssid.length() ? ssid : String("(none saved)"));
-  gfx_.println();
-  gfx_.println("Hold the setup button to");
-  gfx_.println("reconfigure. Retrying soon...");
-  gfx_.nextPage();
+  const String net = ssid.length() ? ssid : String("(none saved)");
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+  // The S3 has no dedicated setup button; setup is a long-press of BOOT.
+  const char* lines[] = {"Couldn't join:", net.c_str(), "", "Hold BOOT to",
+                         "open setup."};
+#else
+  const char* lines[] = {"Couldn't join:", net.c_str(), "", "Hold setup to",
+                         "reconfigure."};
+#endif
+  drawCenteredScreen(gfx_, "No WiFi", lines, 5);
 }
 
 void Display::showSettingsSaved() {
-  gfx_.setPartialWindow(0, 0, gfx_.width(), gfx_.height());
-  gfx_.fillScreen(GxEPD_WHITE);
-  gfx_.nextPage();
-  gfx_.fillScreen(GxEPD_BLACK);
-  gfx_.nextPage();
-  gfx_.fillScreen(GxEPD_WHITE);
-  gfx_.nextPage();
+  // Quick white -> black -> white flash to acknowledge a saved form. Full-window
+  // refreshes so the flash is visible on panels that ignore partial updates.
+  const uint16_t sequence[] = {GxEPD_WHITE, GxEPD_BLACK, GxEPD_WHITE};
+  gfx_.setFullWindow();
+  for (uint16_t color : sequence) {
+    gfx_.firstPage();
+    do {
+      gfx_.fillScreen(color);
+    } while (gfx_.nextPage());
+  }
 }
 
 namespace {

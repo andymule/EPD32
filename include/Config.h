@@ -2,9 +2,51 @@
 #include <Arduino.h>
 
 // ---------------------------------------------------------------------------
-// Hardware pins (Lilygo T5 v2.2: ESP32 + 2.9" b/w e-paper, integrated wiring)
+// Hardware pins
 // ---------------------------------------------------------------------------
 namespace pins {
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+// Waveshare ESP32-S3-Touch-ePaper-1.54 (ESP32-S3 + 1.54" 200x200 SPI panel +
+// FT6336 capacitive touch). Every EPD control/SPI line sits in the S3 RTC GPIO
+// range (0-21) so the panel is, in principle, ULP-drivable later (see
+// BOARD_MIGRATION.md); this build still drives it from the main core.
+constexpr int EPD_PWR = 6;   // EPD3V3_EN: ACTIVE-LOW (AO3401 P-FET) -> LOW = on
+constexpr int EPD_CS = 11;
+constexpr int EPD_DC = 10;
+constexpr int EPD_RST = 9;
+constexpr int EPD_BUSY = 8;
+
+constexpr int SPI_SCK = 12;
+constexpr int SPI_MISO = -1;  // unused by the panel (write-only SPI)
+constexpr int SPI_MOSI = 13;
+
+// FT6336 touch reset. The touch controller sits on the *always-on* 3V3 rail
+// (not the switchable EPD rail), so it would keep drawing current in deep sleep
+// unless held in reset. The firmware doesn't use touch, so we park it in reset
+// permanently (driven LOW + GPIO hold across sleep) to protect the battery.
+constexpr int EPD_TP_RST = 7;
+
+// Battery soft power-latch (Waveshare BAT_Control / BAT_KEY). When the board
+// runs from the Li-ion battery, the PWR button only powers the rail momentarily;
+// firmware must drive VBAT_PWR HIGH to latch it on and hold that level through
+// deep sleep, or the board powers off. Harmless on USB power (USB feeds VSYS).
+//   VBAT_PWR     - drive HIGH to keep the battery rail latched on.
+//   PWR_BUTTON   - the PWR key (active-low); doubles as an ext1 wake that, when
+//                  pressed, powers the board off (unlatch VBAT_PWR).
+constexpr int VBAT_PWR = 17;
+constexpr int PWR_BUTTON = 18;
+
+// The board's two side buttons are BOOT (GPIO0) and PWR (GPIO18):
+//   WAKE_BUTTON (BOOT) - tap to wake for an immediate refresh; HOLD ~3s to open
+//                        the at.mo setup portal (change settings; also keeps the
+//                        device awake so USB stays enumerated for flashing).
+//   PWR_BUTTON  (PWR)  - wakes and powers the board off (unlatch VBAT_PWR).
+// There is no dedicated setup button; the long-press of BOOT replaces it, so the
+// SleepManager reads WAKE_BUTTON for both the short (refresh) and long (setup)
+// press (see SleepManager::setupButtonHeld).
+constexpr int WAKE_BUTTON = 0;  // BOOT button
+#else
+// Lilygo T5 v2.2 (classic ESP32 + 2.9" b/w e-paper, integrated wiring).
 constexpr int EPD_CS = 5;
 constexpr int EPD_DC = 19;
 constexpr int EPD_RST = 12;
@@ -20,6 +62,7 @@ constexpr int SPI_MOSI = 23;
 //   SETUP_BUTTON - forces the configuration portal when held during boot/wake.
 constexpr int WAKE_BUTTON = 37;
 constexpr int SETUP_BUTTON = 39;
+#endif
 }  // namespace pins
 
 // ---------------------------------------------------------------------------

@@ -51,9 +51,14 @@ class Display {
   void showSettingsSaved();
 
  private:
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+  // 1.54" 200x200 V2 panel = SSD1681 (GxEPD2_154_D67). If a unit ships with a
+  // different controller marking, swap this class to match its example sketch.
+  GxEPD2_BW<GxEPD2_154_D67, GxEPD2_154_D67::HEIGHT> gfx_{
+      GxEPD2_154_D67(pins::EPD_CS, pins::EPD_DC, pins::EPD_RST, pins::EPD_BUSY)};
+#else
   GxEPD2_BW<GxEPD2_290, GxEPD2_290::HEIGHT> gfx_{
       GxEPD2_290(pins::EPD_CS, pins::EPD_DC, pins::EPD_RST, pins::EPD_BUSY)};
-  const GFXfont* font9_ = &FreeSans9pt7b;
-  const GFXfont* font12_ = &FreeSans12pt7b;
+#endif
   uint8_t layoutStyle_ = display_defaults::STYLE;
 };

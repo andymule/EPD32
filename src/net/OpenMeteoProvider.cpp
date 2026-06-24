@@ -123,12 +123,15 @@ bool OpenMeteoProvider::fetch(HttpClientHelper& http, float lat, float lon,
       ssUtc > 0 ? static_cast<int>(((ssUtc + offset + 1800) / 3600) % 24) : -1;
 
   // Hourly temp + precip: copy HOURLY_POINTS samples starting at the current
-  // hour. The hourly timestamps share the same basis as current.time, so the
-  // starting index is the whole-hours elapsed since the first sample.
+  // hour. Anchor the start index to out.current.utcEpoch (the same Date-header
+  // time we feed setClock), not the coarse JSON current.time, so the window's
+  // left edge stays aligned with the on-screen clock as Display rolls it forward
+  // with sysNow - hourStartUtc.
   out.hourlyCount = 0;
   if (haveHourly) {
-    int start = static_cast<int>((currentUtc - firstHour) / 3600);
+    int start = static_cast<int>((out.current.utcEpoch - firstHour) / 3600);
     if (start < 0) start = 0;
+    if (start >= hourCount) start = hourCount > 0 ? hourCount - 1 : 0;
     const time_t startUtc = static_cast<time_t>(hourTimes[start] | 0UL);
     out.hourStartUtc = startUtc;
     out.hourStart = hour(startUtc + offset);

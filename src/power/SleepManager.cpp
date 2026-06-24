@@ -10,7 +10,11 @@
 #include "Config.h"
 #include "Log.h"
 #include "display/Display.h"
-#include "esp32/ulp.h"
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+#include <driver/gpio.h>  // gpio_hold_en / gpio_deep_sleep_hold_en
+#else
+#include "esp32/ulp.h"  // classic-ESP32-only header path
+#endif
 #include "settings/Settings.h"
 
 namespace {
@@ -52,20 +56,78 @@ bool SleepManager::clockValid() { return time(nullptr) > kClockValidAfter; }
 
 time_t SleepManager::currentUtc() { return time(nullptr); }
 
+void SleepManager::initBoardPower() {
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+  // Latch the battery rail on and hold that level through deep sleep, so the
+  // board stays powered once the PWR button is released (on battery) and across
+  // every wake. On USB this is harmless (the board is fed from VSYS regardless).
+  // The held value (HIGH) equals the desired value, so on a deep-sleep wake the
+  // rail is already latched and this simply re-affirms it.
+  pinMode(pins::VBAT_PWR, OUTPUT);
+  digitalWrite(pins::VBAT_PWR, HIGH);
+  gpio_hold_en(static_cast<gpio_num_t>(pins::VBAT_PWR));
+  gpio_deep_sleep_hold_en();
+#endif
+}
+
 void SleepManager::enableWakeSources() {
   // Wake button (active-low) via ext1. ext1 is chosen over ext0/touch because it
   // lets the RTC peripheral power domain switch off during deep sleep (lowest
   // sleep current); the board's external pull-up holds the line high until the
   // button is pressed and pulls it low.
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+  // BOOT (refresh) or PWR (power off) can wake; ANY_LOW since either may fire.
+  const uint64_t mask =
+      (1ULL << pins::WAKE_BUTTON) | (1ULL << pins::PWR_BUTTON);
+  esp_sleep_enable_ext1_wakeup(mask, ESP_EXT1_WAKEUP_ANY_LOW);
+#else
   esp_sleep_enable_ext1_wakeup(1ULL << pins::WAKE_BUTTON, ESP_EXT1_WAKEUP_ALL_LOW);
+#endif
 }
 
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+[[noreturn]] void SleepManager::powerOff() {
+  // PWR button: unlatch the battery rail. On battery the board powers off the
+  // instant the latch opens; on USB (still fed from VSYS) we fall through to a
+  // deep sleep that only a button press can end, which is the closest to "off".
+  gpio_hold_dis(static_cast<gpio_num_t>(pins::VBAT_PWR));
+  pinMode(pins::VBAT_PWR, OUTPUT);
+  digitalWrite(pins::VBAT_PWR, LOW);
+  esp_sleep_enable_ext1_wakeup(
+      (1ULL << pins::WAKE_BUTTON) | (1ULL << pins::PWR_BUTTON),
+      ESP_EXT1_WAKEUP_ANY_LOW);
+  esp_deep_sleep_start();
+}
+#endif
+
 bool SleepManager::setupButtonHeld() {
-  // Active-low, debounced so a transient can't drop the device into the portal.
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+  // No dedicated setup button on this board: a *long press* of the top/refresh
+  // button (BOOT/GPIO0) opens the setup portal. A quick tap wakes for an
+  // immediate refresh; holding it for kSetupHoldMs opens the at.mo AP to change
+  // settings -- and since setup mode stays awake, that's also the moment to
+  // reflash over USB without entering ROM download mode. Returns as soon as the
+  // button is released (fast path for a normal refresh tap).
+  constexpr uint32_t kSetupHoldMs = 3000;
+  pinMode(pins::WAKE_BUTTON, INPUT_PULLUP);  // BOOT also has its own pull-up
+  if (digitalRead(pins::WAKE_BUTTON) != LOW) return false;  // not held -> refresh
+  const uint32_t start = millis();
+  while (digitalRead(pins::WAKE_BUTTON) == LOW) {
+    if (millis() - start >= kSetupHoldMs) {
+      LOGLN("Top button long-press -> setup portal.");
+      return true;
+    }
+    delay(10);
+  }
+  return false;  // released before the hold threshold -> normal refresh
+#else
+  // LilyGo T5: dedicated setup button, active-low, debounced so a transient
+  // can't drop the device into the portal.
   pinMode(pins::SETUP_BUTTON, INPUT);
   if (digitalRead(pins::SETUP_BUTTON) != LOW) return false;
   delay(20);
   return digitalRead(pins::SETUP_BUTTON) == LOW;
+#endif
 }
 
 [[noreturn]] void SleepManager::deepSleep(Display& display, Settings& settings,
@@ -138,6 +200,8 @@ void SleepManager::setWeatherOnScreen(bool onScreen) { screenShowsWeather = onSc
 
 bool SleepManager::weatherOnScreen() { return screenShowsWeather; }
 
+bool SleepManager::fetchRetryPending() { return consecutiveFailures > 0; }
+
 WakeReason SleepManager::checkWakeReason(Display& display, Settings& settings) {
   // A held setup button takes priority over the wake cause, so the user can
   // force the configuration portal from any boot or wake (hold it during a
@@ -155,6 +219,12 @@ WakeReason SleepManager::checkWakeReason(Display& display, Settings& settings) {
       return WakeReason::TimedRefresh;
 
     case ESP_SLEEP_WAKEUP_EXT1:
+#if defined(BOARD_WAVESHARE_S3_154_TOUCH)
+      if (esp_sleep_get_ext1_wakeup_status() & (1ULL << pins::PWR_BUTTON)) {
+        LOGLN("PWR button -> power off.");
+        powerOff();  // unlatches battery rail; does not return
+      }
+#endif
       LOGLN("Wake from button (ext1).");
       return WakeReason::RefreshNow;
 
@@ -171,7 +241,9 @@ WakeReason SleepManager::checkWakeReason(Display& display, Settings& settings) {
       display.clearFullScreen();
       screenShowsWeather = false;  // panel was just wiped white
       LOGLN("Wake from RESET or other");
+#if defined(CONFIG_ULP_COPROC_RESERVE_MEM) && CONFIG_ULP_COPROC_RESERVE_MEM > 0
       memset(RTC_SLOW_MEM, 0, CONFIG_ULP_COPROC_RESERVE_MEM);
+#endif
       return WakeReason::HardReset;
   }
 }
