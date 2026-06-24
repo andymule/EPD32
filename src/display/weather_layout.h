@@ -58,6 +58,7 @@ struct WeatherView {
   int hourStart;           // clock hour (0-23) of sample[0]; -1 to skip labels
   int sunriseHour;         // local clock hour of sunrise (0-23); -1 if unknown
   int sunsetHour;          // local clock hour of sunset (0-23); -1 if unknown
+  int humidity = -1;       // relative humidity %, 0-100; <0 hides the field
 };
 
 // ---- Small helpers (no STL: Arduino redefines min/max as macros) ------------
@@ -127,12 +128,14 @@ inline void thickLine(G& g, int x0, int y0, int x1, int y1, int t, uint16_t c) {
 }
 
 // Clear sky: a clean circle. Bold filled disc at hero sizes; a thin ring in the
-// small day cells — matching the reference iconography (no rays).
+// small day cells — matching the reference iconography (no rays). forceSolid
+// keeps it a filled disc even at small sizes (used by the square layout).
 template <class G>
-inline void iconSun(G& g, int cx, int cy, int s, uint16_t c, uint16_t bg) {
+inline void iconSun(G& g, int cx, int cy, int s, uint16_t c, uint16_t bg,
+                    bool forceSolid = false) {
   int r = s * 38 / 100;
   g.fillCircle(cx, cy, r, c);
-  if (s < 40) {                          // small -> hollow ring
+  if (s < 40 && !forceSolid) {           // small -> hollow ring
     int sw = imax(2, s * 13 / 100);
     g.fillCircle(cx, cy, r - sw, bg);
   }
@@ -220,16 +223,63 @@ inline void iconFog(G& g, int cx, int cy, int s, uint16_t c, uint16_t bg) {
 }
 
 template <class G>
-inline void iconPartly(G& g, int cx, int cy, int s, uint16_t c, uint16_t bg) {
-  iconSun(g, cx + s * 18 / 100, cy - s * 18 / 100, s * 58 / 100, c, bg);
+inline void iconPartly(G& g, int cx, int cy, int s, uint16_t c, uint16_t bg,
+                       bool forceSolid = false) {
+  iconSun(g, cx + s * 18 / 100, cy - s * 18 / 100, s * 58 / 100, c, bg, forceSolid);
   iconCloud(g, cx - s * 8 / 100, cy + s * 10 / 100, s * 88 / 100, c, bg);
 }
 
+// A small solid teardrop (humidity marker): a bulbous round bottom tapering to
+// a pointed top. Kept solid because a hollow outline collapses into an ambiguous
+// little ring at the tiny sizes this is used at; solid reads clearly as a drop.
 template <class G>
-inline void drawIcon(G& g, int cx, int cy, int s, int code, uint16_t c, uint16_t bg) {
+inline void iconDrop(G& g, int cx, int cy, int s, uint16_t c, uint16_t bg) {
+  (void)bg;
+  int r = imax(2, s * 36 / 100);
+  int by = cy + s * 16 / 100;            // centre of the round bottom
+  int apexY = cy - s * 50 / 100;         // pointed tip
+  // The taper meets the bowl just above its centre, so the circle's shoulders
+  // form the widest part — a teardrop, not a plain cone.
+  int joinY = by - r / 2;
+  int span = imax(1, joinY - apexY);
+  for (int y = apexY; y <= joinY; y++) {
+    int hw = (r * 92 / 100) * (y - apexY) / span;
+    g.drawFastHLine(cx - hw, y, 2 * hw + 1, c);
+  }
+  g.fillCircle(cx, by, r, c);            // round bottom completes the teardrop
+}
+
+// Stacked horizontal zigzag lines — a "water/humidity" motif (the wavy texture
+// from the reference design). `amp` is the zigzag half-height and `pitch` the
+// centre-to-centre row spacing, so the clear gap between rows is pitch - 2*amp
+// (uniform across every row). Centred on (cx, cy).
+template <class G>
+inline void iconWaves(G& g, int cx, int cy, int w, int amp, int pitch,
+                      uint16_t c, int rows = 3) {
+  if (rows < 1) rows = 1;
+  if (amp < 1) amp = 1;
+  int step = imax(2, w / 7);                 // horizontal peak<->valley spacing
+  int left = cx - w / 2, right = cx + w / 2;
+  int topY = cy - pitch * (rows - 1) / 2;    // evenly spaced, vertically centred
+  for (int r = 0; r < rows; r++) {
+    int ry = topY + r * pitch;
+    int prevx = left, sign = -1, prevy = ry + sign * amp;
+    for (int x = left + step; x <= right; x += step) {
+      sign = -sign;
+      int y = ry + sign * amp;
+      g.drawLine(prevx, prevy, x, y, c);
+      prevx = x;
+      prevy = y;
+    }
+  }
+}
+
+template <class G>
+inline void drawIcon(G& g, int cx, int cy, int s, int code, uint16_t c,
+                     uint16_t bg, bool forceSolid = false) {
   switch (code) {
-    case 0: case 1: iconSun(g, cx, cy, s, c, bg); break;
-    case 2: iconPartly(g, cx, cy, s, c, bg); break;
+    case 0: case 1: iconSun(g, cx, cy, s, c, bg, forceSolid); break;
+    case 2: iconPartly(g, cx, cy, s, c, bg, forceSolid); break;
     case 3: iconCloud(g, cx, cy, s, c, bg); break;
     case 45: case 48: iconFog(g, cx, cy, s, c, bg); break;
     case 51: case 53: case 55: case 56: case 57:
@@ -373,7 +423,7 @@ inline int hiLoWidth(G& g, const Pick& hp, const Pick& lp, int hi, int lo) {
 // right edge sits at rightX, vertically centered on cy. Returns its width.
 template <class G>
 inline int drawHiLo(G& g, const Pick& hp, const Pick& lp, int rightX, int cy,
-                    int hi, int lo, uint16_t c, uint16_t bg) {
+                    int hi, int lo, uint16_t c, uint16_t bg, int gapOverride = -1) {
   char hb[8], lb[8];
   snprintf(hb, sizeof(hb), "%d", hi);
   snprintf(lb, sizeof(lb), "%d", lo);
@@ -383,7 +433,7 @@ inline int drawHiLo(G& g, const Pick& hp, const Pick& lp, int rightX, int cy,
   int degR = imax(1, hh * 9 / 100);     // small degree, consistent with the rest
   int loDegR = imax(1, lh * 9 / 100);
   int blockW = imax(hw, lw) + degR * 2 + imax(1, degR / 2);
-  int gap = imax(4, hh * 35 / 100);
+  int gap = gapOverride >= 0 ? gapOverride : imax(4, hh * 35 / 100);
   int hiCY = cy - (hh + gap) / 2;
   int loCY = cy + (lh + gap) / 2;
   int leftX = rightX - blockW;
@@ -745,7 +795,7 @@ inline void drawSkyGlyph(G& g, int kind, int gx, int gy, int r, uint16_t c,
 // the curve into the open sky, so it stays visible either way.
 template <class G>
 inline void drawTempHorizon(G& g, int x0, int w, int yTop, int yBot, int fillTo,
-                            const WeatherView& v) {
+                            const WeatherView& v, bool square = false) {
   const int* temp = v.temp;
   int n = v.hourlyCount;
   if (!temp || n < 2 || w < 4) {  // no curve data -> plain dark mass
@@ -789,14 +839,34 @@ inline void drawTempHorizon(G& g, int x0, int w, int yTop, int yBot, int fillTo,
   // Rain-chance columns: bottom-up, height scaled by chance; colour inverts at
   // the curve so the dotted line reads on both the dark mass and the sky.
   if (v.precip) {
-    for (int i = 0; i < m; i++) {
-      int pv = iclamp(v.precip[i], 0, 100);
-      if (pv < 20) continue;
-      int px = x0 + (w - 1) * i / (m - 1);
-      int cy = horizonCurveY(px, x0, w, cp, kk, mn, mx, ampTop, yBot);
-      int top = yBot - pv * band / 100;
-      for (int y = yBot - 2; y >= top; y -= 3)
-        g.drawPixel(px, y, (y > cy) ? GxEPD_WHITE : GxEPD_BLACK);
+    if (square) {
+      // Even horizontal spacing: walk a fixed pixel pitch, interpolating the
+      // chance at each column instead of deriving columns from the (unevenly-
+      // rounded) hourly indices, so the dotted field stays regular.
+      const int pitch = 4;
+      for (int px = x0; px < x0 + w; px += pitch) {
+        long pos = (long)(px - x0) * (m - 1);
+        int i = (int)(pos / (w - 1));
+        int rem = (int)(pos % (w - 1));
+        int a = iclamp(v.precip[i], 0, 100);
+        int b = iclamp(v.precip[imin(i + 1, m - 1)], 0, 100);
+        int pv = a + (b - a) * rem / (w - 1);
+        if (pv < 20) continue;
+        int cy = horizonCurveY(px, x0, w, cp, kk, mn, mx, ampTop, yBot);
+        int top = yBot - pv * band / 100;
+        for (int y = yBot - 2; y >= top; y -= 3)
+          g.drawPixel(px, y, (y > cy) ? GxEPD_WHITE : GxEPD_BLACK);
+      }
+    } else {
+      for (int i = 0; i < m; i++) {
+        int pv = iclamp(v.precip[i], 0, 100);
+        if (pv < 20) continue;
+        int px = x0 + (w - 1) * i / (m - 1);
+        int cy = horizonCurveY(px, x0, w, cp, kk, mn, mx, ampTop, yBot);
+        int top = yBot - pv * band / 100;
+        for (int y = yBot - 2; y >= top; y -= 3)
+          g.drawPixel(px, y, (y > cy) ? GxEPD_WHITE : GxEPD_BLACK);
+      }
     }
   }
 
@@ -825,9 +895,27 @@ inline void drawTempHorizon(G& g, int x0, int w, int yTop, int yBot, int fillTo,
         for (int xx = px - hw; xx < px + hw; xx++)
           g.drawPixel(xx, yy, (yy > cy) ? GxEPD_WHITE : GxEPD_BLACK);
       }
-      int gcy = (cy - hh) - imax(2, sc) - 5 - gr;  // breathing room above mark
-      if (gcy - gr * 3 / 2 >= yTop)  // headroom for rays / arrow above the disc
-        drawSkyGlyph(g, kind, px, gcy, gr, GxEPD_BLACK, GxEPD_WHITE);
+      int marg = imax(2, sc) + 5;
+      int gAbove = (cy - hh) - marg - gr;        // in the white sky
+      int gBelow = (cy + hh) + marg + gr;        // in the dark mass
+      bool canAbove = gAbove - gr * 3 / 2 >= yTop;
+      int disc = gr * 8 / 5;
+      if (square) {
+        // When the temp is high (curve near the top) drop the glyph below the
+        // line into the dark mass; the disc is filled to match its background
+        // (white sky / black mass), so it just clears rain dots — no visible box.
+        bool highHere = (cy - yTop) * 100 < (yBot - yTop) * 55;
+        bool placeBelow = highHere && gBelow + disc < fillTo;
+        if (placeBelow) {
+          g.fillCircle(px, gBelow, disc, GxEPD_BLACK);
+          drawSkyGlyph(g, kind, px, gBelow, gr, GxEPD_WHITE, GxEPD_BLACK);
+        } else if (canAbove) {
+          g.fillCircle(px, gAbove, disc, GxEPD_WHITE);
+          drawSkyGlyph(g, kind, px, gAbove, gr, GxEPD_BLACK, GxEPD_WHITE);
+        }
+      } else if (canAbove) {  // locked layouts: unchanged
+        drawSkyGlyph(g, kind, px, gAbove, gr, GxEPD_BLACK, GxEPD_WHITE);
+      }
     }
   }
 }
@@ -836,12 +924,46 @@ inline void drawTempHorizon(G& g, int x0, int w, int yTop, int yBot, int fillTo,
 // weekday initial — white on the dark mass, for the days ahead (from tomorrow).
 template <class G>
 inline void drawHorizonDays(G& g, int x, int y, int w, int h, const WeatherView& v,
-                            const FontSet& F) {
+                            const FontSet& F, bool solidIcons = false,
+                            bool lightText = false, bool showLow = false) {
   int ahead = v.dayCount - 1;
   if (ahead < 1) return;
   int cols = iclamp(w / 24, 2, ahead);
   int colW = w / cols;
-  const Pick hiC[] = {{F.f9b, 1}, {F.f7b, 1}};
+  // lightText swaps the bold day fonts for regular weight (a calmer footer).
+  const Pick hiCbold[]  = {{F.f9b, 1}, {F.f7b, 1}};
+  const Pick hiClight[] = {{F.f9, 1},  {F.f7, 1}};
+  const Pick* hiC = lightText ? hiClight : hiCbold;
+  const GFXfont* letterFont = lightText ? F.f6 : F.f6b;
+
+  auto letterOf = [](const DayView& d) {
+    char c = (d.label && d.label[0]) ? d.label[0] : ' ';
+    if (c >= 'a' && c <= 'z') c -= 32;
+    return c;
+  };
+
+  if (showLow) {  // taller strip: weekday letter / icon / hi (bold) / lo (regular)
+    const Pick hiBold[] = {{F.f9b, 1}, {F.f7b, 1}};
+    const Pick loReg[]  = {{F.f9, 1},  {F.f7, 1}};
+    Pick hpHi = fitText(g, hiBold, 2, "888", colW * 58 / 100, h * 19 / 100);
+    Pick hpLo = fitText(g, loReg, 2, "888", colW * 58 / 100, h * 19 / 100);
+    int yLetter = y + h * 10 / 100;
+    int iconCY = y + h * 38 / 100;
+    int iconS = 19;  // pixel-match the 128x296 daily icon (its colW-6) exactly
+    int yHi = y + h * 68 / 100;
+    int yLo = y + h * 88 / 100;
+    for (int i = 0; i < cols; i++) {
+      const DayView& d = v.days[i + 1];
+      int cx = x + colW * i + colW / 2;
+      char ltr[2] = {letterOf(d), '\0'};
+      drawText(g, letterFont, 1, cx, yLetter, 1, ltr, GxEPD_WHITE);
+      drawIcon(g, cx, iconCY, iconS, d.code, GxEPD_WHITE, GxEPD_BLACK, solidIcons);
+      drawTempBlock(g, hpHi.font, hpHi.size, cx, yHi, d.hi, GxEPD_WHITE, GxEPD_BLACK);
+      drawTempBlock(g, hpLo.font, hpLo.size, cx, yLo, d.lo, GxEPD_WHITE, GxEPD_BLACK);
+    }
+    return;
+  }
+
   Pick hp = fitText(g, hiC, 2, "888", colW * 60 / 100, h * 26 / 100);
   int yHi = y + h * 15 / 100;
   int iconCY = y + h * 46 / 100;
@@ -851,12 +973,9 @@ inline void drawHorizonDays(G& g, int x, int y, int w, int h, const WeatherView&
     const DayView& d = v.days[i + 1];
     int cx = x + colW * i + colW / 2;
     drawTempBlock(g, hp.font, hp.size, cx, yHi, d.hi, GxEPD_WHITE, GxEPD_BLACK);
-    drawIcon(g, cx, iconCY, iconS, d.code, GxEPD_WHITE, GxEPD_BLACK);
-    char ltr[2];
-    ltr[0] = (d.label && d.label[0]) ? d.label[0] : ' ';
-    if (ltr[0] >= 'a' && ltr[0] <= 'z') ltr[0] -= 32;  // uppercase initial
-    ltr[1] = '\0';
-    drawText(g, F.f6b, 1, cx, yLetter, 1, ltr, GxEPD_WHITE);
+    drawIcon(g, cx, iconCY, iconS, d.code, GxEPD_WHITE, GxEPD_BLACK, solidIcons);
+    char ltr[2] = {letterOf(d), '\0'};
+    drawText(g, letterFont, 1, cx, yLetter, 1, ltr, GxEPD_WHITE);
   }
 }
 
@@ -869,6 +988,10 @@ inline void renderHorizon(G& g, const WeatherView& v, const FontSet& F) {
   g.setTextWrap(false);
   const int M = imax(4, W / 24);
 
+  // Square-ish panels (e.g. 200x200) get a dedicated hero treatment so the open
+  // sky doesn't read as empty; portrait/landscape keep their existing layout.
+  const bool square = W * 100 >= H * 85 && W * 100 <= H * 118;
+
   // 1) Date/time pinned to the very top — small, no rule. The 6pt fits the date
   //    and time on one line with room to spare on every supported panel.
   int topH = iclamp(H * 8 / 100, 13, 34);
@@ -877,14 +1000,27 @@ inline void renderHorizon(G& g, const WeatherView& v, const FontSet& F) {
   if (v.time && v.time[0]) drawText(g, F.f6, 1, W - M, hcy, 2, v.time, GxEPD_BLACK);
 
   // 2) Day forecast sits in the dark mass at the bottom; reserve its band.
+  //    Square panels use a taller strip so each day can show its low temp too;
+  //    the extra height is taken from the hourly band (the hero stays put).
   int dayH = iclamp(H * 24 / 100, 46, 150);
+  if (square) dayH = iclamp(H * 35 / 100, 60, 100);
   int dayTop = H - dayH;
 
   // 3) The temperature curve is the top edge of the dark mass. Its coldest
-  //    point rests at dayTop; its warmest rises a band above.
-  int curveBot = dayTop;
+  //    point rests at dayTop; its warmest rises a band above. Square lifts the
+  //    curve/rain 8px so there's a black breathing gap above the daily strip.
+  int curveBot = square ? dayTop - 8 : dayTop;
   int curveTop = imax(topH + H * 6 / 100, dayTop - imax(40, H * 22 / 100));
-  drawTempHorizon(g, 0, W, curveTop, curveBot, H, v);
+  // Square: the hero is a short horizontal band, so the curve starts higher and
+  // gets a tall, calm sky — which also gives the noon/sunrise sky glyphs the
+  // headroom they need above the curve's peak. (Band ~10% taller than before.)
+  if (square) curveTop = topH + iclamp(H * 33 / 100, 53, 77);
+  // Square only: enlarge *just the curve's drawing region* (6px up, 3px down) so
+  // the wave has more room to flow. curveTop itself is left intact below, so the
+  // hero band height (heroH) and the daily strip don't move — nothing translates.
+  int curveDrawTop = curveTop - (square ? 6 : 0);
+  int curveDrawBot = curveBot + (square ? 3 : 0);
+  drawTempHorizon(g, 0, W, curveDrawTop, curveDrawBot, H, v, square);
 
   // 4) Hero: a large, clean icon and the current temperature in the open area
   //    above the curve, with today's high/low in small text to its right (per
@@ -895,7 +1031,81 @@ inline void renderHorizon(G& g, const WeatherView& v, const FontSet& F) {
   const Pick hiC[] = {{F.f9b, 1}, {F.f7b, 1}, {F.f6b, 1}};
   const Pick loC[] = {{F.f9, 1}, {F.f7, 1}, {F.f6, 1}};
   const bool hasDay = v.days && v.dayCount > 0;
-  if (heroH >= W * 34 / 100) {  // tall enough to stack icon over temp
+  if (square) {  // square panel (200x200): a horizontal hero band
+    const int contentL = M;
+    const int contentW = W - 2 * M;
+    const int cy = topH + heroH / 2;
+    const bool hasHum = v.humidity >= 0;
+
+    // Layout: [icon] [current temp + today hi/lo, as one group] ... [humidity].
+    // Humidity is pinned to the far right (small, in the header/time font); the
+    // hi/lo hugs the temperature it describes rather than floating between them.
+    //
+    // Measure the humidity unit (wavy lines + %) first, so its column reserves
+    // exactly the width it needs and the unit is right-aligned to the margin —
+    // it can't run off the panel regardless of how wide the waves get.
+    char humBuf[8];
+    int humPw = 0, humPh = 0, humWavW = 0, humUnitW = 0, humAmp = 0, humPitch = 0;
+    if (hasHum) {
+      snprintf(humBuf, sizeof(humBuf), "%d%%", iclamp(v.humidity, 0, 100));
+      measure(g, F.f6, 1, humBuf, &humPw, &humPh);
+      humAmp = imax(2, humPh * 22 / 100);
+      humPitch = 2 * humAmp + 2;                 // tighter: ~1px gap between rows
+      humWavW = imax(12, humPw);                 // a touch narrower
+      humUnitW = imax(humWavW, humPw);
+    }
+    const int humNudge = 12;                     // pull the unit in from the edge
+    int iconW = contentW * 25 / 100;
+    int humW = hasHum ? humUnitW + humNudge + imax(6, M) : 0;
+
+    // Icon: ~15% larger than the prior pass, and forced solid (no hollow ring).
+    int iconBox = imin(iconW, heroH) * 90 / 100;
+    drawIcon(g, contentL + iconW / 2, cy, iconBox, v.code, GxEPD_BLACK,
+             GxEPD_WHITE, /*forceSolid=*/true);
+
+    // Current temperature. The space between the icon and humidity is the temp's
+    // home; it sits left-of-centre there so its hi/lo can hug its right side.
+    int midL = contentL + iconW;
+    int midR = contentL + contentW - humW;
+    int midW = midR - midL;
+    int tempW = midW * 60 / 100;
+    int tempCx = midL + tempW / 2;
+    Pick tp = fitText(g, tempC, 4, "888", tempW * 98 / 100, heroH * 90 / 100);
+    drawTempBlock(g, tp.font, tp.size, tempCx, cy, v.temperature, GxEPD_BLACK,
+                  GxEPD_WHITE);
+
+    if (hasDay) {  // hi/lo immediately to the right of the temperature
+      Pick hp = fitText(g, hiC, 3, "88", midW * 26 / 100, heroH * 38 / 100);
+      Pick lp = fitText(g, loC, 3, "88", midW * 26 / 100, heroH * 38 / 100);
+      int tw, th;
+      char tb[8];
+      snprintf(tb, sizeof(tb), "%d", v.temperature);
+      measure(g, tp.font, tp.size, tb, &tw, &th);
+      int adv = textAdvance(g, tp.font, tp.size, tb);
+      int degR = imax(1, th * 9 / 100);
+      int tempRight = tempCx + adv / 2 + imax(1, degR / 2) + 2 * degR;
+      int t2, hh;
+      measure(g, hp.font, hp.size, "88", &t2, &hh);
+      int vgap = imax(5, hh * 55 / 100);            // vertical air between hi/lo
+      int hiloLeft = tempRight + imax(8, W / 18);   // small gap, grouped w/ temp
+      int blockW = hiLoWidth(g, hp, lp, v.days[0].hi, v.days[0].lo);
+      drawHiLo(g, hp, lp, hiloLeft + blockW, cy, v.days[0].hi, v.days[0].lo,
+               GxEPD_BLACK, GxEPD_WHITE, vgap);
+    }
+
+    if (hasHum) {  // VStack: a couple of mini zigzag rows above the % (header font)
+      const int rows = 2;
+      int hcx = contentL + contentW - humNudge - humUnitW / 2;
+      int zagsH = (rows - 1) * humPitch + 2 * humAmp;
+      int gap = 2;
+      int vtotal = zagsH + gap + humPh;
+      int top = cy - vtotal / 2;
+      iconWaves(g, hcx, top + zagsH / 2, humWavW, humAmp, humPitch, GxEPD_BLACK,
+                rows);
+      drawText(g, F.f6, 1, hcx, top + zagsH + gap + humPh / 2 + 2, 1, humBuf,
+               GxEPD_BLACK);
+    }
+  } else if (heroH >= W * 34 / 100) {  // tall enough to stack icon over temp
     int iconBox = imin(W * 62 / 100, heroH * 56 / 100);
     drawIcon(g, W / 2, topH + heroH * 34 / 100, iconBox, v.code, GxEPD_BLACK, GxEPD_WHITE);
     int tempCY = topH + heroH * 80 / 100;
@@ -940,8 +1150,14 @@ inline void renderHorizon(G& g, const WeatherView& v, const FontSet& F) {
     }
   }
 
-  // 5) Daily highs + icons along the bottom of the dark mass.
-  drawHorizonDays(g, 0, dayTop, W, dayH, v, F);
+  // 5) Daily highs + icons along the bottom of the dark mass. On square panels,
+  //    nudge the strip down ~2px for a touch more breathing room between it and
+  //    the hourly curve/rain above.
+  if (square)
+    drawHorizonDays(g, 0, dayTop + 4, W, dayH - 4, v, F, /*solidIcons=*/false,
+                    /*lightText=*/true, /*showLow=*/true);
+  else
+    drawHorizonDays(g, 0, dayTop, W, dayH, v, F);
 }
 
 // ---- Dispatch ---------------------------------------------------------------

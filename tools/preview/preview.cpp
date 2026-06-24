@@ -44,7 +44,7 @@ int main() {
                     20, 15, 10, 5,  10, 20, 35, 25, 15, 10, 5,  0};
   atmo::WeatherView v{"Evanston", "Wed Jun 10", "9:53", "Clear", 21, 0,
                       days,       6,            temp,   precip,  24, 9,
-                      6,          20};  // sunrise 6am, sunset 8pm
+                      6,          20,           64};  // sunrise 6am, sunset 8pm, 64% RH
 
   struct Screen { const char* name; int w; int h; };
   Screen screens[] = {{"t5_296x128", 296, 128},

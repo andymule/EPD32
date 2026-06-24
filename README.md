@@ -34,6 +34,37 @@ Dependencies are declared in `platformio.ini` and fetched automatically:
 - [ArduinoJson](https://github.com/bblanchon/ArduinoJson) (v7)
 - [Time](https://github.com/PaulStoffregen/Time)
 
+## Flashing to hardware
+
+`pio run --target upload` (above) flashes the T5 v2.2. In practice:
+
+```bash
+# 1. Find the serial port. The board MUST be on a *data* USB cable, not a
+#    charge-only one. A short on the Grove header can also drop the CP2104 USB
+#    bridge so nothing enumerates -- if no port shows up it's almost always the
+#    cable or a wiring short, not software.
+pio device list                 # e.g. /dev/cu.usbserial-01B9721E
+
+# 2. Build + upload the default (debug) env to that port.
+pio run -e debug -t upload --upload-port /dev/cu.usbserial-01B9721E
+
+# 3. (optional) watch it boot.
+pio device monitor
+```
+
+Notes:
+
+- The default upload speed is reliable; forcing a faster baud (e.g. 1.5 Mbaud)
+  builds quicker but intermittently fails with "chip stopped responding" — just
+  retry at the default if that happens.
+- Uploading or opening the monitor toggles DTR/RTS, which resets the board, so
+  it cold-boots on connect.
+- **Settings survive a reflash.** WiFi credentials and preferences live in NVS, a
+  separate flash partition that a normal app upload does *not* erase — so a
+  previously-configured board boots straight back to the weather screen rather
+  than the setup portal. To force first-run setup again, hold the setup button
+  during boot/wake, or wipe NVS with `pio run -t erase` and re-upload.
+
 ## First-time setup
 
 On first boot (or while holding the setup button during boot/wake) the device
